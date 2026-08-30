@@ -36,7 +36,7 @@ export const COMMANDS = [
   { cmd: "/kick", hint: "Remove a seat", who: "creator" },
   { cmd: "/extend", hint: "Add days to a seat", who: "creator" },
   { cmd: "/payout", hint: "Account attached to this ID", who: "creator" },
-  { cmd: "/loop", hint: "Retry, warn, then kick", who: "creator" },
+  { cmd: "/loop", hint: "Run the money loop now (cron already does this)", who: "creator" },
   { cmd: "/take", hint: "Your Telegram wallet", who: "any" },
 ] as const;
 

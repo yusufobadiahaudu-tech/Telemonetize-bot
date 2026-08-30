@@ -11,6 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BotRouteImport } from './routes/bot'
+import { Route as ApiCronLoopRouteImport } from './routes/api/cron.loop'
+import { Route as ApiDemoPaystackRouteImport } from './routes/api/demo.paystack'
+import { Route as ApiWebhooksPaystackRouteImport } from './routes/api/webhooks.paystack'
+import { Route as ApiWebhooksTelegramRouteImport } from './routes/api/webhooks.telegram'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -22,31 +26,86 @@ const BotRoute = BotRouteImport.update({
   path: '/bot',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiCronLoopRoute = ApiCronLoopRouteImport.update({
+  id: '/api/cron/loop',
+  path: '/api/cron/loop',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDemoPaystackRoute = ApiDemoPaystackRouteImport.update({
+  id: '/api/demo/paystack',
+  path: '/api/demo/paystack',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWebhooksPaystackRoute = ApiWebhooksPaystackRouteImport.update({
+  id: '/api/webhooks/paystack',
+  path: '/api/webhooks/paystack',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWebhooksTelegramRoute = ApiWebhooksTelegramRouteImport.update({
+  id: '/api/webhooks/telegram',
+  path: '/api/webhooks/telegram',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/api/cron/loop': typeof ApiCronLoopRoute
+  '/api/demo/paystack': typeof ApiDemoPaystackRoute
+  '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
+  '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/api/cron/loop': typeof ApiCronLoopRoute
+  '/api/demo/paystack': typeof ApiDemoPaystackRoute
+  '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
+  '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/api/cron/loop': typeof ApiCronLoopRoute
+  '/api/demo/paystack': typeof ApiDemoPaystackRoute
+  '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
+  '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/bot'
+  fullPaths:
+    | '/'
+    | '/bot'
+    | '/api/cron/loop'
+    | '/api/demo/paystack'
+    | '/api/webhooks/paystack'
+    | '/api/webhooks/telegram'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/bot'
-  id: '__root__' | '/' | '/bot'
+  to:
+    | '/'
+    | '/bot'
+    | '/api/cron/loop'
+    | '/api/demo/paystack'
+    | '/api/webhooks/paystack'
+    | '/api/webhooks/telegram'
+  id:
+    | '__root__'
+    | '/'
+    | '/bot'
+    | '/api/cron/loop'
+    | '/api/demo/paystack'
+    | '/api/webhooks/paystack'
+    | '/api/webhooks/telegram'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BotRoute: typeof BotRoute
+  ApiCronLoopRoute: typeof ApiCronLoopRoute
+  ApiDemoPaystackRoute: typeof ApiDemoPaystackRoute
+  ApiWebhooksPaystackRoute: typeof ApiWebhooksPaystackRoute
+  ApiWebhooksTelegramRoute: typeof ApiWebhooksTelegramRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -65,12 +124,44 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof BotRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/cron/loop': {
+      id: '/api/cron/loop'
+      path: '/api/cron/loop'
+      fullPath: '/api/cron/loop'
+      preLoaderRoute: typeof ApiCronLoopRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/demo/paystack': {
+      id: '/api/demo/paystack'
+      path: '/api/demo/paystack'
+      fullPath: '/api/demo/paystack'
+      preLoaderRoute: typeof ApiDemoPaystackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/webhooks/paystack': {
+      id: '/api/webhooks/paystack'
+      path: '/api/webhooks/paystack'
+      fullPath: '/api/webhooks/paystack'
+      preLoaderRoute: typeof ApiWebhooksPaystackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/webhooks/telegram': {
+      id: '/api/webhooks/telegram'
+      path: '/api/webhooks/telegram'
+      fullPath: '/api/webhooks/telegram'
+      preLoaderRoute: typeof ApiWebhooksTelegramRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BotRoute: BotRoute,
+  ApiCronLoopRoute: ApiCronLoopRoute,
+  ApiDemoPaystackRoute: ApiDemoPaystackRoute,
+  ApiWebhooksPaystackRoute: ApiWebhooksPaystackRoute,
+  ApiWebhooksTelegramRoute: ApiWebhooksTelegramRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -59,7 +59,13 @@ export function MessageBubble({
                   <button
                     key={btn.payload}
                     type="button"
-                    onClick={() => void submitCallback(btn.payload)}
+                    onClick={() => {
+                      if (btn.url) {
+                        window.open(btn.url, "_blank", "noopener,noreferrer");
+                        return;
+                      }
+                      void submitCallback(btn.payload);
+                    }}
                     className={cn(
                       "min-h-10 flex-1 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors duration-150 active:scale-[0.96]",
                       btn.tone === "danger"

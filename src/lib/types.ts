@@ -28,6 +28,7 @@ export type Community = {
   platformPlan: "trial" | "starter" | "pro";
   chatId: string;
   chatType: ChatKind;
+  telegramChatId: string | null;
   botUsername: string;
   isPublic: boolean;
   payoutConnected: boolean;
@@ -54,6 +55,7 @@ export type Member = {
   userId: string;
   username: string;
   name: string;
+  telegramUserId: string | null;
   status: MemberStatus;
   inviteToken: string;
   inviteUrl: string;
@@ -86,6 +88,7 @@ export type Payment = {
   currency: Currency;
   chargedMinor: number;
   provider: Provider;
+  providerRef: string | null;
   status: PayStatus;
   platformFee: number;
   creatorPayout: number;
@@ -123,6 +126,7 @@ export type BotLog = {
 export type InlineBtn = {
   label: string;
   payload: string;
+  url?: string;
   tone?: "default" | "primary" | "danger";
 };
 

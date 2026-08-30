@@ -14,7 +14,8 @@ export function LoopPlayground() {
   const communities = useApp((s) => s.communities);
   const members = useApp((s) => s.members);
   const payments = useApp((s) => s.payments);
-  const subscribe = useApp((s) => s.subscribe);
+  const initializeCheckout = useApp((s) => s.initializeCheckout);
+  const fulfillCharge = useApp((s) => s.fulfillCharge);
   const runLoop = useApp((s) => s.runLoop);
   const setRole = useApp((s) => s.setRole);
   const setActingAs = useApp((s) => s.setActingAs);
@@ -23,6 +24,7 @@ export function LoopPlayground() {
   const [invite, setInvite] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<string | null>(null);
+  const [pendingRef, setPendingRef] = useState<string | null>(null);
   const [loop, setLoop] = useState<LoopResult | null>(null);
   const [currency, setCurrency] = useState<Currency>("USD");
   const [method, setMethod] = useState<Provider>("card");
@@ -38,14 +40,32 @@ export function LoopPlayground() {
   function payAsCustomer() {
     setActingAs("self");
     setRole("member");
-    const result = subscribe("pln_la_premium", method, currency);
-    if (result.ok) {
-      setInvite(result.inviteUrl);
-      setReceipt(`${charge} via ${providerLabel(method)}`);
-      setPayError(null);
-    } else {
-      setPayError(result.error);
+    const started = initializeCheckout("pln_la_premium", method, currency);
+    if (!started.ok) {
+      setPayError(started.error);
+      return;
     }
+    setPendingRef(started.reference);
+    setReceipt(`Paystack initialize · ${charge} via ${providerLabel(method)}. Waiting for charge.success.`);
+    setPayError(null);
+    setInvite(null);
+  }
+
+  function confirmCharge() {
+    if (!pendingRef) return;
+    const done = fulfillCharge(pendingRef);
+    if (!done.ok) {
+      setPayError(done.error);
+      return;
+    }
+    if (done.kind !== "member") {
+      setPayError("Unexpected checkout.");
+      return;
+    }
+    setInvite(done.inviteUrl);
+    setReceipt(`${charge} via ${providerLabel(method)} · charge.success`);
+    setPendingRef(null);
+    setPayError(null);
   }
 
   function kickLapsed() {
@@ -98,8 +118,8 @@ export function LoopPlayground() {
             <p className="font-mono text-xs text-accent">02</p>
             <h3 className="mt-2 font-display text-lg font-semibold">Customer pays</h3>
             <p className="mt-2 text-sm text-muted">
-              Dollar first. Other currencies on tap. Card or bank transfer. They only see the amount
-              and the join link.
+              Dollar first. Other currencies on tap. Card or bank transfer. Paystack initialize first —
+              the join link is minted only after charge.success. They never see the split.
             </p>
             {mySeat ? (
               <p className="mt-4 rounded-md bg-elevated px-3 py-3 text-sm">
@@ -107,6 +127,20 @@ export function LoopPlayground() {
                 {receipt ? <span className="mt-1 block text-muted">{receipt}</span> : null}
                 <span className="mt-1 block font-mono text-success">{invite ?? mySeat.inviteUrl}</span>
               </p>
+            ) : pendingRef ? (
+              <div className="mt-4 space-y-3">
+                <p className="rounded-md bg-elevated px-3 py-3 text-sm">
+                  Checkout open. Ref {pendingRef}.
+                  {receipt ? <span className="mt-1 block text-muted">{receipt}</span> : null}
+                </p>
+                <button
+                  type="button"
+                  onClick={confirmCharge}
+                  className="inline-flex min-h-11 w-full items-center justify-center rounded-md bg-accent px-4 text-sm font-medium text-accent-fg transition-transform duration-150 active:scale-[0.98]"
+                >
+                  Simulate charge.success
+                </button>
+              </div>
             ) : (
               <div className="mt-4 space-y-3">
                 <div className="flex flex-wrap gap-1.5">
@@ -162,7 +196,8 @@ export function LoopPlayground() {
             <p className="font-mono text-xs text-accent">03</p>
             <h3 className="mt-2 font-display text-lg font-semibold">Bot kicks lapsed seats</h3>
             <p className="mt-2 text-sm text-muted">
-              @ibrahim_ngn did not renew. Run the money loop: retry, warn, kick.
+              @ibrahim_ngn did not renew. A server cron retries, warns, then kicks and revokes the
+              invite. This button is the /loop override.
             </p>
             {ibrahim?.status === "removed" || loop ? (
               <p className="mt-4 rounded-md bg-elevated px-3 py-3 text-sm">
@@ -202,6 +237,10 @@ export function LoopPlayground() {
             onClick={() => {
               resetDemo();
               setInvite(null);
+              setReceipt(null);
+              setPendingRef(null);
+              setPayError(null);
+              setLoop(null);
               setPayError(null);
               setReceipt(null);
               setLoop(null);

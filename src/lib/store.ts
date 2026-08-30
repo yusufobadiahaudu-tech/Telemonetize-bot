@@ -79,12 +79,45 @@ type AppActions = {
   mySeats: () => { member: Member; sub: Subscription | undefined; plan: Plan | undefined; community: Community }[];
   isMemberOf: (communityId: string) => boolean;
   log: (communityId: string, event: string, message: string) => void;
+  initializeCheckout: (
+    planId: string,
+    provider: Provider,
+    currency?: Currency,
+  ) =>
+    | {
+        ok: true;
+        reference: string;
+        authorizationUrl: string;
+        demo: boolean;
+        community: Community;
+        plan: Plan;
+      }
+    | { ok: false; error: string };
+  initializeProCheckout: (
+    provider: Provider,
+    currency?: Currency,
+  ) =>
+    | { ok: true; reference: string; authorizationUrl: string; demo: boolean }
+    | { ok: false; error: string };
+  fulfillCharge: (reference: string) =>
+    | {
+        ok: true;
+        kind: "member";
+        inviteUrl: string;
+        community: Community;
+        plan: Plan;
+        currency: Currency;
+        provider: Provider;
+      }
+    | { ok: true; kind: "pro" }
+    | { ok: false; error: string };
   subscribe: (
     planId: string,
     provider: Provider,
     currency?: Currency,
   ) => { ok: true; inviteUrl: string; community: Community; plan: Plan } | { ok: false; error: string };
   kick: (username: string, reason?: string) => string;
+  markCardFailing: (username: string) => void;
   extend: (username: string, days: number) => string;
   connectBank: (bankCode: string, accountNumber: string) => string;
   disconnectBank: () => string;
@@ -285,6 +318,15 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
       },
 
       subscribe: (planId, provider, currency = "USD") => {
+        const started = get().initializeCheckout(planId, provider, currency);
+        if (!started.ok) return started;
+        const done = get().fulfillCharge(started.reference);
+        if (!done.ok) return done;
+        if (done.kind !== "member") return { ok: false as const, error: "Unexpected checkout type." };
+        return { ok: true as const, inviteUrl: done.inviteUrl, community: done.community, plan: done.plan };
+      },
+
+      initializeCheckout: (planId, provider, currency = "USD") => {
         const plan = get().plans.find((p) => p.id === planId && p.isActive);
         if (!plan) return { ok: false as const, error: "That plan is gone." };
         const community = get().communities.find((c) => c.id === plan.communityId);
@@ -300,19 +342,138 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           (m) => m.communityId === community.id && m.userId === me.id && m.status === "active",
         );
         if (existing) return { ok: false as const, error: "You already have a seat." };
+        const split = splitAmounts(plan.priceUsd, community.feeBps);
+        const paymentId = nid("pay");
+        const reference = `PSK_${paymentId.slice(4, 14)}`;
+        const payment: Payment = {
+          id: paymentId,
+          communityId: community.id,
+          subscriptionId: "",
+          planId: plan.id,
+          userId: me.id,
+          amount: plan.priceUsd,
+          currency,
+          chargedMinor: usdToMinor(plan.priceUsd, currency),
+          provider,
+          providerRef: reference,
+          status: "pending",
+          platformFee: split.platformFee,
+          creatorPayout: split.creatorPayout,
+          settlement: "pending",
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ payments: [payment, ...s.payments] }));
+        get().log(
+          community.id,
+          "checkout",
+          `Paystack initialize ${reference} for @${me.username} · ${plan.name} via ${provider} (${currency}). Waiting for charge.success.`,
+        );
+        void persistCheckout(payment);
+        return {
+          ok: true as const,
+          reference,
+          authorizationUrl: demoPaystackUrl(reference),
+          demo: true as const,
+          community,
+          plan,
+        };
+      },
 
+      initializeProCheckout: (provider, currency = "USD") => {
+        const me = get().me();
+        if (get().communities.some((c) => c.ownerId === me.id)) {
+          return { ok: false as const, error: "You already have a creator ID." };
+        }
+        const paymentId = nid("pay");
+        const reference = `PRO_${paymentId.slice(4, 14)}`;
+        const payment: Payment = {
+          id: paymentId,
+          communityId: "platform",
+          subscriptionId: "",
+          planId: "pro",
+          userId: me.id,
+          amount: 1500,
+          currency,
+          chargedMinor: usdToMinor(1500, currency),
+          provider,
+          providerRef: reference,
+          status: "pending",
+          platformFee: 1500,
+          creatorPayout: 0,
+          settlement: "pending",
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ payments: [payment, ...s.payments] }));
+        void persistCheckout(payment);
+        return {
+          ok: true as const,
+          reference,
+          authorizationUrl: demoPaystackUrl(reference),
+          demo: true as const,
+        };
+      },
+
+      fulfillCharge: (reference) => {
+        const payment = get().payments.find((p) => p.providerRef === reference);
+        if (!payment) return { ok: false as const, error: "No checkout with that reference." };
+        if (payment.status === "success") {
+          if (payment.planId === "pro") return { ok: true as const, kind: "pro" as const };
+          const community = get().communities.find((c) => c.id === payment.communityId);
+          const plan = get().plans.find((p) => p.id === payment.planId);
+          const member = get().members.find(
+            (m) => m.communityId === payment.communityId && m.userId === payment.userId,
+          );
+          if (community && plan && member?.inviteUrl) {
+            return {
+              ok: true as const,
+              kind: "member" as const,
+              inviteUrl: member.inviteUrl,
+              community,
+              plan,
+              currency: payment.currency,
+              provider: payment.provider,
+            };
+          }
+        }
+        if (payment.status !== "pending") {
+          return { ok: false as const, error: "That checkout is no longer open." };
+        }
+        if (payment.planId === "pro") {
+          set((s) => ({
+            payments: s.payments.map((p) =>
+              p.id === payment.id
+                ? { ...p, status: "success" as const, settlement: "wallet_and_bank" as const }
+                : p,
+            ),
+            pending: { kind: "await_community_name", platformPlan: "pro" },
+            role: "creator",
+            actingAs: "self",
+          }));
+          void persistFulfill(reference);
+          return { ok: true as const, kind: "pro" as const };
+        }
+        const plan = get().plans.find((p) => p.id === payment.planId && p.isActive);
+        if (!plan) return { ok: false as const, error: "That plan is gone." };
+        const community = get().communities.find((c) => c.id === plan.communityId);
+        if (!community) return { ok: false as const, error: "Community not found." };
+        const me = get().me();
+        const actorId = payment.userId;
+        const actor =
+          me.id === actorId
+            ? me
+            : { id: actorId, username: payment.userId.slice(0, 12), name: "Member" };
         const start = new Date();
         const end = periodEnd(plan.interval, start);
-        const split = splitAmounts(plan.priceUsd, community.feeBps);
         const token = nid("inv").slice(4);
         const inviteUrl = `https://t.me/+${token}`;
         const subId = nid("sub");
         const member: Member = {
           id: nid("tgm"),
           communityId: community.id,
-          userId: me.id,
-          username: me.username,
-          name: me.name,
+          userId: actor.id,
+          username: actor.username,
+          name: actor.name,
+          telegramUserId: actor.id,
           status: "active",
           inviteToken: token,
           inviteUrl,
@@ -324,8 +485,8 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           id: subId,
           communityId: community.id,
           planId: plan.id,
-          userId: me.id,
-          username: me.username,
+          userId: actor.id,
+          username: actor.username,
           status: "active",
           autoRenew: true,
           periodStart: start.toISOString(),
@@ -333,37 +494,39 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           retryCount: 0,
           cardFailing: false,
         };
-        const payment: Payment = {
-          id: nid("pay"),
-          communityId: community.id,
-          subscriptionId: subId,
-          planId: plan.id,
-          userId: me.id,
-          amount: plan.priceUsd,
-          currency,
-          chargedMinor: usdToMinor(plan.priceUsd, currency),
-          provider,
-          status: "success",
-          platformFee: split.platformFee,
-          creatorPayout: split.creatorPayout,
-          settlement: split.settlementStatus,
-          createdAt: start.toISOString(),
-        };
         set((s) => ({
-          members: [...s.members, member],
+          members: [...s.members.filter((m) => !(m.userId === actor.id && m.communityId === community.id)), member],
           subscriptions: [
-            ...s.subscriptions.filter((x) => !(x.userId === me.id && x.communityId === community.id)),
+            ...s.subscriptions.filter((x) => !(x.userId === actor.id && x.communityId === community.id)),
             sub,
           ],
-          payments: [payment, ...s.payments],
+          payments: s.payments.map((p) =>
+            p.id === payment.id
+              ? {
+                  ...p,
+                  status: "success" as const,
+                  subscriptionId: subId,
+                  settlement: "wallet_and_bank" as const,
+                }
+              : p,
+          ),
         }));
         get().log(
           community.id,
           "join",
-          `@${me.username} paid ${plan.name} via ${provider} (${currency}). Invite ${inviteUrl}. Fee ${split.platformFee}¢ to Telegram wallet.`,
+          `charge.success ${reference}. Admitted @${actor.username} to ${community.name} (${plan.name}). Invite ${inviteUrl}.`,
         );
-        get().pushSystem(community.chatId, `@${me.username} joined ${community.name}.`);
-        return { ok: true as const, inviteUrl, community, plan };
+        get().pushSystem(community.chatId, `@${actor.username} joined ${community.name}.`);
+        void persistFulfill(reference);
+        return {
+          ok: true as const,
+          kind: "member" as const,
+          inviteUrl,
+          community,
+          plan,
+          currency: payment.currency,
+          provider: payment.provider,
+        };
       },
 
       kick: (username, reason = "removed_by_admin") => {
@@ -376,6 +539,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
             (m.username.toLowerCase() === handle || m.name.toLowerCase() === handle),
         );
         if (!member) return `No member @${handle} in ${community.name}.`;
+        const revokedLink = member.inviteUrl;
         set((s) => ({
           members: s.members.map((m) =>
             m.id === member.id
@@ -384,6 +548,8 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
                   status: "removed" as const,
                   removedAt: new Date().toISOString(),
                   removeReason: reason,
+                  inviteUrl: "",
+                  inviteToken: "",
                 }
               : m,
           ),
@@ -393,9 +559,36 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
               : sub,
           ),
         }));
-        get().log(community.id, "kick", `Removed @${member.username} — ${reason.replaceAll("_", " ")}.`);
+        get().log(
+          community.id,
+          "kick",
+          `Removed @${member.username} — ${reason.replaceAll("_", " ")}. Revoked invite ${revokedLink || "link"} via banChatMember.`,
+        );
         get().pushSystem(community.chatId, `Removed @${member.username} — ${reason.replaceAll("_", " ")}.`);
-        return `Kicked @${member.username} from ${community.name}.`;
+        void persistKick(community.id, member.telegramUserId, member.username, revokedLink);
+        return `Kicked @${member.username} from ${community.name}. Invite revoked.`;
+      },
+
+      markCardFailing: (username) => {
+        const community = get().ownedCommunity();
+        if (!community) return;
+        const handle = username.replace(/^@/, "").toLowerCase();
+        const member = get().members.find(
+          (m) => m.communityId === community.id && m.username.toLowerCase() === handle,
+        );
+        if (!member) return;
+        set((s) => ({
+          subscriptions: s.subscriptions.map((sub) =>
+            sub.communityId === community.id && sub.userId === member.userId
+              ? {
+                  ...sub,
+                  cardFailing: true,
+                  autoRenew: true,
+                  periodEnd: new Date(Date.now() - 60_000).toISOString(),
+                }
+              : sub,
+          ),
+        }));
       },
 
       extend: (username, days) => {
@@ -540,6 +733,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           platformPlan,
           chatId,
           chatType: "group",
+          telegramChatId: null,
           botUsername: "TeleMonetizeBot",
           isPublic: true,
           ...payoutFields,
@@ -660,6 +854,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
               currency: "USD",
               chargedMinor: plan.priceUsd,
               provider: "card",
+              providerRef: null,
               status: "failed",
               platformFee: split.platformFee,
               creatorPayout: 0,
@@ -729,6 +924,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
             currency: "USD",
             chargedMinor: plan.priceUsd,
             provider: "card",
+            providerRef: `PSK_${nid("rnw").slice(4, 12)}`,
             status: "success",
             platformFee: split.platformFee,
             creatorPayout: split.creatorPayout,
@@ -791,4 +987,40 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
       },
     }),
 );
+
+function demoPaystackUrl(reference: string) {
+  return `/api/demo/paystack?ref=${encodeURIComponent(reference)}`;
+}
+
+async function persistCheckout(payment: Payment) {
+  try {
+    const { persistCheckoutFn } = await import("@/lib/server/fns");
+    await persistCheckoutFn({ data: payment });
+  } catch {
+    // Preview still works if the database is warming up.
+  }
+}
+
+async function persistFulfill(reference: string) {
+  try {
+    const { persistFulfillFn } = await import("@/lib/server/fns");
+    await persistFulfillFn({ data: { reference } });
+  } catch {
+    // ignore
+  }
+}
+
+async function persistKick(
+  communityId: string,
+  telegramUserId: string | null,
+  username: string,
+  inviteUrl: string,
+) {
+  try {
+    const { persistKickFn } = await import("@/lib/server/fns");
+    await persistKickFn({ data: { communityId, telegramUserId, username, inviteUrl } });
+  } catch {
+    // ignore
+  }
+}
 
