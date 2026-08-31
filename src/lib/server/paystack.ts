@@ -66,7 +66,7 @@ export async function initializeTransaction(opts: {
   reference: string;
   callbackUrl: string;
   currency: string;
-  channels: Array<"card" | "bank" | "bank_transfer">;
+  channels: Array<"card" | "bank" | "bank_transfer" | "mobile_money" | "ussd">;
   subaccount?: string | null;
   metadata: Record<string, unknown>;
 }) {
