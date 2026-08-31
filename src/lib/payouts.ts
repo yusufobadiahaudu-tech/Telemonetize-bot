@@ -163,6 +163,28 @@ export function parseRail(raw: string): PayoutRail | null {
   return null;
 }
 
+export function parseCountry(raw: string): PayoutCountry | null {
+  const t = raw.trim().toLowerCase();
+  if (!t) return null;
+  return (
+    PAYOUT_COUNTRIES.find(
+      (c) =>
+        c.code.toLowerCase() === t ||
+        c.name.toLowerCase() === t ||
+        c.currency.toLowerCase() === t,
+    ) ?? null
+  );
+}
+
+export function settlementChoices(country: string): Currency[] {
+  const local = defaultCurrencyForCountry(country);
+  const list: Currency[] = [local];
+  for (const extra of ["USD", "EUR", "GBP"] as Currency[]) {
+    if (!list.includes(extra)) list.push(extra);
+  }
+  return list;
+}
+
 export function isPayoutCurrency(value: string): value is Currency {
   return isCurrency(value);
 }

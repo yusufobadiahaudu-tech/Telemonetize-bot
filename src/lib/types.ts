@@ -37,11 +37,11 @@ export type Community = {
   bankCode: string | null;
   accountNumber: string | null;
   accountName: string | null;
-  payoutRail?: PayoutRail | null;
-  payoutCountry?: string | null;
-  payoutCurrency?: Currency;
-  payoutHandle?: string | null;
-  fxFeeBps?: number;
+  payoutRail: PayoutRail | null;
+  payoutCountry: string | null;
+  payoutCurrency: Currency;
+  payoutHandle: string | null;
+  fxFeeBps: number;
 };
 
 export type Plan = {
@@ -172,6 +172,14 @@ export type Pending =
   | { kind: "await_community_rail"; name: string; priceUsd: number; platformPlan: "trial" | "pro" }
   | { kind: "await_community_country"; name: string; priceUsd: number; platformPlan: "trial" | "pro"; rail: PayoutRail }
   | {
+      kind: "await_community_currency";
+      name: string;
+      priceUsd: number;
+      platformPlan: "trial" | "pro";
+      rail: PayoutRail;
+      country: string;
+    }
+  | {
       kind: "await_community_bank";
       name: string;
       priceUsd: number;
@@ -202,6 +210,7 @@ export type Pending =
     }
   | { kind: "await_payout_rail" }
   | { kind: "await_payout_country"; rail: PayoutRail }
+  | { kind: "await_payout_currency"; rail: PayoutRail; country: string }
   | { kind: "await_payout_handle"; rail: PayoutRail; country: string; currency: Currency; institution: string }
   | { kind: "await_checkout_currency"; planId: string }
   | { kind: "await_pro_currency" }
