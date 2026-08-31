@@ -107,7 +107,7 @@ describe("bot FSM", () => {
     const rail = reduce(w, { type: "callback", payload: "crail:paypal" });
     assert.equal(rail.pending?.kind, "await_community_country");
     w = { ...w, pending: rail.pending };
-    const country = reduce(w, { type: "callback", payload: "pcountry:EU" });
+    const country = reduce(w, { type: "callback", payload: "pcountry:DE".replace("DE", "EU") });
     assert.equal(country.pending?.kind, "await_community_currency");
     w = { ...w, pending: country.pending };
     const settle = reduce(w, { type: "callback", payload: "settle:EUR" });

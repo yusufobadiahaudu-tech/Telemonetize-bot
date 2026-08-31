@@ -18,13 +18,13 @@ const STEPS = [
   },
   {
     n: "03",
-    title: "He binds name and account",
-    body: "Lagos Alpha Circle and his GTBank sit on ID LA-ADA. His share hits that account. Your percentage credits your Telegram wallet.",
+    title: "He binds name and payout",
+    body: "Lagos Alpha Circle plus a local bank, OPay, PayPal, or Stripe sit on ID LA-ADA. He picks the currency he receives. Your percentage credits your Telegram wallet.",
   },
   {
     n: "04",
     title: "Customers pay here",
-    body: "USD first, or EUR, GBP, NGN, yen and more — card or bank transfer. They never see how the money is shared.",
+    body: "They pay in their currency. Live FX plus a stated conversion fee. Card, bank transfer, mobile money, or PayPal. They never see how the money is shared.",
   },
   {
     n: "05",
@@ -60,9 +60,10 @@ export function Landing() {
               You own the bot. Creators pay you. Members pay them.
             </h1>
             <p className="mt-5 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
-              Mr. A subscribes, gets an ID, binds his group name and a bank account. Customers pay
-              in dollars first — or any other listed currency — by card or bank transfer. They get a
-              join link. They never see the split. If they do not renew, the bot kicks them.
+              Mr. A subscribes, gets an ID, binds his group name and a payout rail anywhere in the
+              world. Customers pay in their local currency. The bot converts at a live rate, shows
+              the FX fee, and mints a join link after the charge confirms. They never see the split.
+              If they do not renew, the bot kicks them.
             </p>
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <Link
@@ -117,8 +118,8 @@ export function Landing() {
               <p className="mt-2 text-muted">8% of every member payment credits your Telegram wallet.</p>
               <ul className="mt-6 space-y-2 text-sm text-muted">
                 <li>Creator ID issued on subscribe</li>
-                <li>Group name and payout account bound to that ID</li>
-                <li>Customers pay USD first, or any listed currency, by card or transfer</li>
+                <li>Group name and payout rail bound to that ID — bank, mobile money, PayPal, Stripe</li>
+                <li>Customers pay in local currency; conversion and FX fee are shown first</li>
               </ul>
             </article>
             <article className="rounded-xl border border-accent/40 bg-surface p-6">
