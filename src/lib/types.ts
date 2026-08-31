@@ -37,11 +37,11 @@ export type Community = {
   bankCode: string | null;
   accountNumber: string | null;
   accountName: string | null;
-  payoutRail: PayoutRail | null;
-  payoutCountry: string | null;
-  payoutCurrency: Currency;
-  payoutHandle: string | null;
-  fxFeeBps: number;
+  payoutRail?: PayoutRail | null;
+  payoutCountry?: string | null;
+  payoutCurrency?: Currency;
+  payoutHandle?: string | null;
+  fxFeeBps?: number;
 };
 
 export type Plan = {
