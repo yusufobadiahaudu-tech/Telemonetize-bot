@@ -1,5 +1,6 @@
 import type { Currency } from "./currency";
 import { formatCharge, PRIMARY_CURRENCY } from "./currency";
+import { describePayout, type PayoutRail } from "./payouts";
 
 export type { Currency };
 export type BillingInterval = "monthly" | "yearly" | "one_time";
@@ -99,6 +100,9 @@ export function periodEnd(interval: string, start = new Date()): Date {
 export function providerLabel(provider: string): string {
   if (provider === "card") return "card";
   if (provider === "transfer") return "bank transfer";
+  if (provider === "mobile_money") return "mobile money";
+  if (provider === "paypal") return "PayPal";
+  if (provider === "stripe") return "Stripe";
   return provider;
 }
 
@@ -107,9 +111,10 @@ export function destinationFor(c: {
   bankName: string | null;
   accountNumber: string | null;
   accountName: string | null;
+  payoutRail?: PayoutRail | null;
+  payoutCountry?: string | null;
+  payoutCurrency?: Currency | null;
+  payoutHandle?: string | null;
 }): string | null {
-  if (!c.payoutConnected || !c.bankName || !c.accountNumber) return null;
-  const last4 = c.accountNumber.slice(-4);
-  const who = c.accountName ? ` · ${c.accountName}` : "";
-  return `${c.bankName} •••• ${last4}${who}`;
+  return describePayout(c);
 }
