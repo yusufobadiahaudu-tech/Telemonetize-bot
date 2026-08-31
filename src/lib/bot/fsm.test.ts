@@ -98,6 +98,57 @@ describe("bot FSM", () => {
     assert.deepEqual(result.effects, [{ type: "fulfill", reference: "PSK_demo" }]);
     assert.equal(result.replies.length, 0);
   });
+
+  it("walks rail → country → currency → PayPal handle for a new creator ID", () => {
+    let w = world({
+      pending: { kind: "await_community_rail", name: "Berlin Desk", priceUsd: 2000, platformPlan: "trial" },
+      role: "creator",
+    });
+    const rail = reduce(w, { type: "callback", payload: "crail:paypal" });
+    assert.equal(rail.pending?.kind, "await_community_country");
+    w = { ...w, pending: rail.pending };
+    const country = reduce(w, { type: "callback", payload: "pcountry:EU" });
+    assert.equal(country.pending?.kind, "await_community_currency");
+    w = { ...w, pending: country.pending };
+    const settle = reduce(w, { type: "callback", payload: "settle:EUR" });
+    assert.equal(settle.pending?.kind, "await_community_handle");
+    w = { ...w, pending: settle.pending };
+    const done = reduce(w, { type: "input", text: "ada@example.com" });
+    assert.equal(done.effects[0]?.type, "create_community");
+    if (done.effects[0]?.type === "create_community") {
+      assert.equal(done.effects[0].payout?.rail, "paypal");
+      assert.equal(done.effects[0].payout?.currency, "EUR");
+      assert.equal(done.effects[0].payout?.handle, "ada@example.com");
+    }
+  });
+
+  it("changes an existing ID to M-Pesa without minting a new community", () => {
+    const base = world({
+      actor: ADAEZE,
+      role: "creator",
+      actingAs: "adaeze",
+      pending: { kind: "await_payout_rail" },
+    });
+    const rail = reduce(base, { type: "callback", payload: "rail:mobile_money" });
+    assert.equal(rail.pending?.kind, "await_payout_country");
+    const country = reduce({ ...base, pending: rail.pending }, { type: "callback", payload: "pcountry:KE" });
+    assert.equal(country.pending?.kind, "await_payout_currency");
+    const settle = reduce({ ...base, pending: country.pending }, { type: "callback", payload: "settle:KES" });
+    assert.equal(settle.pending?.kind, "await_payout_handle");
+    const handle = reduce({ ...base, pending: settle.pending }, { type: "input", text: "254711000000" });
+    assert.equal(handle.effects[0]?.type, "connect_payout");
+    if (handle.effects[0]?.type === "connect_payout") {
+      assert.equal(handle.effects[0].payout.rail, "mobile_money");
+      assert.equal(handle.effects[0].payout.country, "KE");
+      assert.equal(handle.effects[0].payout.currency, "KES");
+    }
+  });
+
+  it("quotes conversion before emitting a mobile-money checkout", () => {
+    const result = reduce(world(), { type: "callback", payload: "ccy:pln_la_premium:EUR" });
+    assert.match(result.replies[0]?.text ?? "", /FX fee|You pay|List/);
+    assert.ok(result.replies[0]?.buttons?.some((row) => row.some((b) => b.payload.includes("mobile_money"))));
+  });
 });
 
 describe("numericTelegramId", () => {
