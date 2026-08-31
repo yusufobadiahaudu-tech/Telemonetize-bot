@@ -3,10 +3,13 @@ import type { BotEvent, BotReply, Effect } from "@/lib/bot/effects";
 import type { InlineBtn } from "@/lib/types";
 import type { Actor } from "@/lib/bot/world";
 import { getSql } from "@/lib/db";
-import { usdToMinor } from "@/lib/currency";
+import { usdToMinor, type Currency } from "@/lib/currency";
 import { splitAmounts } from "@/lib/format";
 import { nid } from "@/lib/utils";
-import { bankByCode, digitsOnly, isNuban } from "@/lib/banks";
+import { bankByCode } from "@/lib/banks";
+import { institutionLabel, validatePayoutHandle, type PayoutDraft } from "@/lib/payouts";
+import { quoteConversion } from "@/lib/fx";
+import { getRateBook } from "@/lib/server/fx-live";
 import { issueCreatorCode, ownedCommunity } from "@/lib/bot/world";
 import {
   applyTelegramKick,
@@ -47,31 +50,53 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
         fee_bps: number;
         payout_connected: boolean;
         paystack_subaccount: string | null;
-      }>`select id, name, fee_bps, payout_connected, paystack_subaccount from creators where id = ${plan.creator_id}`;
+        payout_currency: string | null;
+        fx_fee_bps: number | null;
+      }>`select id, name, fee_bps, payout_connected, paystack_subaccount, payout_currency, fx_fee_bps from creators where id = ${plan.creator_id}`;
       const creator = creators[0];
-      if (!creator?.payout_connected) return [{ text: "Checkout is closed until a bank is attached." }];
+      if (!creator?.payout_connected) return [{ text: "Checkout is closed until a payout method is attached." }];
       const paymentId = nid("pay");
       const reference = `PSK_${paymentId.slice(4, 14)}`;
       const split = splitAmounts(plan.price_usd, creator.fee_bps);
+      const rates = await getRateBook();
+      const quote = quoteConversion({
+        listUsdCents: plan.price_usd,
+        payCurrency: effect.currency,
+        payoutCurrency: (creator.payout_currency as Currency) || "USD",
+        feeBps: creator.fx_fee_bps ?? 150,
+        platformFeeBps: creator.fee_bps,
+        book: rates.book,
+        source: rates.source,
+        asOf: rates.asOf,
+      });
       await sql`
         insert into payments (
           id, user_id, creator_id, plan_id, amount, currency, charged_minor, provider, provider_ref,
-          status, platform_fee, creator_payout, settlement_status
+          status, platform_fee, creator_payout, settlement_status,
+          payout_currency, fx_rate, fx_fee_bps, fx_fee_minor, payout_minor, rate_source
         ) values (
           ${paymentId}, ${actor.id}, ${creator.id}, ${plan.id}, ${plan.price_usd}, ${effect.currency},
-          ${usdToMinor(plan.price_usd, effect.currency)}, ${effect.provider}, ${reference},
-          'pending', ${split.platformFee}, ${split.creatorPayout}, 'pending'
+          ${quote.payMinor}, ${effect.provider}, ${reference},
+          'pending', ${split.platformFee}, ${split.creatorPayout}, 'pending',
+          ${quote.payoutCurrency}, ${quote.customerRate}, ${quote.feeBps}, ${quote.feeMinor},
+          ${quote.creatorPayoutMinor}, ${quote.source}
         )
       `;
       const started = await startPaystackCheckout({
         paymentId,
         email: checkoutEmail(actor.id),
-        amountMinor: usdToMinor(plan.price_usd, effect.currency),
+        amountMinor: quote.payMinor,
         currency: effect.currency,
         reference,
         provider: effect.provider,
         subaccount: creator.paystack_subaccount,
-        metadata: { planId: plan.id, creatorId: creator.id, userId: actor.id },
+        metadata: {
+          planId: plan.id,
+          creatorId: creator.id,
+          userId: actor.id,
+          payoutCurrency: quote.payoutCurrency,
+          fxFeeBps: quote.feeBps,
+        },
       });
       const buttons: InlineBtn[][] = [
         [{ label: "Pay on Paystack", payload: `openpay:${started.reference}`, url: started.authorizationUrl, tone: "primary" }],
@@ -81,7 +106,7 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       }
       return [
         {
-          text: `Paystack checkout is open for ${creator.name} · ${plan.name}.\n${started.authorizationUrl}\n\nThe join link is minted only after charge.success.`,
+          text: `Checkout is open for ${creator.name} · ${plan.name} via ${effect.provider}.\n${started.authorizationUrl}\n\nThe join link is minted only after charge.success.`,
           buttons,
           kind: "invoice",
         },
@@ -192,10 +217,15 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       ];
     }
     case "create_community": {
-      const digits = digitsOnly(effect.accountNumber);
-      if (!isNuban(digits)) return [{ text: "Enter a 10-digit NUBAN account number." }];
-      const bank = bankByCode(effect.bankCode);
-      if (!bank) return [{ text: "Pick a Nigerian bank." }];
+      const draft: PayoutDraft = effect.payout ?? {
+        rail: "bank",
+        country: "NG",
+        currency: "NGN",
+        institution: bankByCode(effect.bankCode)?.name ?? "Bank",
+        handle: effect.accountNumber,
+      };
+      const invalid = validatePayoutHandle(draft);
+      if (invalid) return [{ text: invalid }];
       const existing = await sql<{ id: string }>`select id from creators where user_id = ${actor.id} limit 1`;
       if (existing[0]) return [{ text: "You already have a creator ID. /studio" }];
       const taken = await sql<{ code: string }>`select code from creators`;
@@ -208,14 +238,18 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
           .slice(0, 32) || "my-room";
       const id = nid("cre");
       const fee = effect.platformPlan === "pro" ? 500 : 800;
+      const inst = institutionLabel(draft);
+      const handle = draft.handle.trim();
       await sql`
         insert into creators (
           id, user_id, slug, code, name, bio, fee_bps, platform_plan,
-          bank_name, bank_code, account_number, account_name, payout_connected, payout_connected_at
+          bank_name, bank_code, account_number, account_name, payout_connected, payout_connected_at,
+          payout_rail, payout_country, payout_currency, payout_handle, fx_fee_bps
         ) values (
           ${id}, ${actor.id}, ${slug}, ${code}, ${effect.name}, 'Paid Telegram group on TeleMonetize.',
-          ${fee}, ${effect.platformPlan}, ${bank.name}, ${bank.code}, ${digits},
-          ${actor.name.toUpperCase()}, true, now()
+          ${fee}, ${effect.platformPlan}, ${inst}, ${effect.bankCode}, ${handle},
+          ${actor.name.toUpperCase()}, true, now(),
+          ${draft.rail}, ${draft.country}, ${draft.currency}, ${handle}, 150
         )
       `;
       await sql`
@@ -233,16 +267,44 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       const world = await loadWorld(actor);
       const community = ownedCommunity(world);
       if (!community) return [{ text: "Create a community first." }];
-      const digits = digitsOnly(effect.accountNumber);
-      const bank = bankByCode(effect.bankCode);
-      if (!isNuban(digits) || !bank) return [{ text: "Enter a valid NUBAN and bank." }];
+      const draft: PayoutDraft = effect.payout ?? {
+        rail: "bank",
+        country: "NG",
+        currency: "NGN",
+        institution: bankByCode(effect.bankCode)?.name ?? "Bank",
+        handle: effect.accountNumber,
+      };
+      const invalid = validatePayoutHandle(draft);
+      if (invalid) return [{ text: invalid }];
+      const inst = institutionLabel(draft);
+      const handle = draft.handle.trim();
       await sql`
         update creators set
-          bank_name = ${bank.name}, bank_code = ${bank.code}, account_number = ${digits},
-          account_name = ${actor.name.toUpperCase()}, payout_connected = true, payout_connected_at = now()
+          bank_name = ${inst}, bank_code = ${effect.bankCode}, account_number = ${handle},
+          account_name = ${actor.name.toUpperCase()}, payout_connected = true, payout_connected_at = now(),
+          payout_rail = ${draft.rail}, payout_country = ${draft.country},
+          payout_currency = ${draft.currency}, payout_handle = ${handle}
         where id = ${community.id}
       `;
-      return [{ text: `ID ${community.code} now pays out to ${bank.name} •••• ${digits.slice(-4)}.` }];
+      return [{ text: `ID ${community.code} now pays out via ${draft.rail} in ${draft.currency} to ${inst}.` }];
+    }
+    case "connect_payout": {
+      const world = await loadWorld(actor);
+      const community = ownedCommunity(world);
+      if (!community) return [{ text: "Create a community first." }];
+      const invalid = validatePayoutHandle(effect.payout);
+      if (invalid) return [{ text: invalid }];
+      const inst = institutionLabel(effect.payout);
+      const handle = effect.payout.handle.trim();
+      await sql`
+        update creators set
+          bank_name = ${inst}, bank_code = ${effect.payout.country}, account_number = ${handle},
+          account_name = ${actor.name.toUpperCase()}, payout_connected = true, payout_connected_at = now(),
+          payout_rail = ${effect.payout.rail}, payout_country = ${effect.payout.country},
+          payout_currency = ${effect.payout.currency}, payout_handle = ${handle}
+        where id = ${community.id}
+      `;
+      return [{ text: `ID ${community.code} now pays out via ${effect.payout.rail} in ${effect.payout.currency} to ${inst}.` }];
     }
     case "add_plan": {
       const world = await loadWorld(actor);
