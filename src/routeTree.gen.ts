@@ -15,6 +15,7 @@ import { Route as ApiCronLoopRouteImport } from './routes/api/cron.loop'
 import { Route as ApiDemoPaystackRouteImport } from './routes/api/demo.paystack'
 import { Route as ApiWebhooksPaystackRouteImport } from './routes/api/webhooks.paystack'
 import { Route as ApiWebhooksTelegramRouteImport } from './routes/api/webhooks.telegram'
+import { Route as ApiFxRouteImport } from './routes/api/fx'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +47,11 @@ const ApiWebhooksTelegramRoute = ApiWebhooksTelegramRouteImport.update({
   path: '/api/webhooks/telegram',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiFxRoute = ApiFxRouteImport.update({
+  id: '/api/fx',
+  path: '/api/fx',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +60,7 @@ export interface FileRoutesByFullPath {
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
   '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
+  '/api/fx': typeof ApiFxRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +69,7 @@ export interface FileRoutesByTo {
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
   '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
+  '/api/fx': typeof ApiFxRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,6 +79,7 @@ export interface FileRoutesById {
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
   '/api/webhooks/telegram': typeof ApiWebhooksTelegramRoute
+  '/api/fx': typeof ApiFxRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -81,6 +90,7 @@ export interface FileRouteTypes {
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
     | '/api/webhooks/telegram'
+    | '/api/fx'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -89,6 +99,7 @@ export interface FileRouteTypes {
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
     | '/api/webhooks/telegram'
+    | '/api/fx'
   id:
     | '__root__'
     | '/'
@@ -97,6 +108,7 @@ export interface FileRouteTypes {
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
     | '/api/webhooks/telegram'
+    | '/api/fx'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -106,6 +118,7 @@ export interface RootRouteChildren {
   ApiDemoPaystackRoute: typeof ApiDemoPaystackRoute
   ApiWebhooksPaystackRoute: typeof ApiWebhooksPaystackRoute
   ApiWebhooksTelegramRoute: typeof ApiWebhooksTelegramRoute
+  ApiFxRoute: typeof ApiFxRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -152,6 +165,14 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiWebhooksTelegramRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/fx': {
+      id: '/api/fx'
+      path: '/api/fx'
+      fullPath: '/api/fx'
+      preLoaderRoute: typeof ApiFxRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+
   }
 }
 
@@ -162,6 +183,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiDemoPaystackRoute: ApiDemoPaystackRoute,
   ApiWebhooksPaystackRoute: ApiWebhooksPaystackRoute,
   ApiWebhooksTelegramRoute: ApiWebhooksTelegramRoute,
+  ApiFxRoute: ApiFxRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
