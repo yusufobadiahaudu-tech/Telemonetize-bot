@@ -1,11 +1,12 @@
 import type { Currency } from "./currency";
+import type { PayoutRail } from "./payouts";
 
 export type Role = "member" | "creator";
 export type ChatKind = "bot" | "group" | "channel";
 export type MemberStatus = "active" | "pending" | "removed";
 export type SubStatus = "active" | "past_due" | "expired" | "cancelled";
 export type PayStatus = "success" | "failed" | "pending";
-export type Provider = "card" | "transfer";
+export type Provider = "card" | "transfer" | "mobile_money" | "paypal" | "stripe";
 export type Interval = "monthly" | "yearly" | "one_time";
 export type FilterAction = "flag" | "remove";
 export type ModAction = "none" | "flagged" | "removed";
@@ -36,6 +37,11 @@ export type Community = {
   bankCode: string | null;
   accountNumber: string | null;
   accountName: string | null;
+  payoutRail: PayoutRail | null;
+  payoutCountry: string | null;
+  payoutCurrency: Currency;
+  payoutHandle: string | null;
+  fxFeeBps: number;
 };
 
 export type Plan = {
@@ -94,6 +100,12 @@ export type Payment = {
   creatorPayout: number;
   settlement: "wallet_and_bank" | "unsplit" | "pending";
   createdAt: string;
+  payoutCurrency?: Currency;
+  fxRate?: number;
+  fxFeeBps?: number;
+  fxFeeMinor?: number;
+  payoutMinor?: number;
+  rateSource?: "live" | "book";
 };
 
 export type Keyword = {
@@ -157,14 +169,40 @@ export type Pending =
   | { kind: "await_nuban"; bankCode: string }
   | { kind: "await_community_name"; platformPlan: "trial" | "pro" }
   | { kind: "await_community_price"; name: string; platformPlan: "trial" | "pro" }
-  | { kind: "await_community_bank"; name: string; priceUsd: number; platformPlan: "trial" | "pro" }
+  | { kind: "await_community_rail"; name: string; priceUsd: number; platformPlan: "trial" | "pro" }
+  | { kind: "await_community_country"; name: string; priceUsd: number; platformPlan: "trial" | "pro"; rail: PayoutRail }
+  | {
+      kind: "await_community_bank";
+      name: string;
+      priceUsd: number;
+      platformPlan: "trial" | "pro";
+      rail?: PayoutRail;
+      country?: string;
+      currency?: Currency;
+    }
   | {
       kind: "await_community_nuban";
       name: string;
       priceUsd: number;
       platformPlan: "trial" | "pro";
       bankCode: string;
+      rail?: PayoutRail;
+      country?: string;
+      currency?: Currency;
     }
+  | {
+      kind: "await_community_handle";
+      name: string;
+      priceUsd: number;
+      platformPlan: "trial" | "pro";
+      rail: PayoutRail;
+      country: string;
+      currency: Currency;
+      institution: string;
+    }
+  | { kind: "await_payout_rail" }
+  | { kind: "await_payout_country"; rail: PayoutRail }
+  | { kind: "await_payout_handle"; rail: PayoutRail; country: string; currency: Currency; institution: string }
   | { kind: "await_checkout_currency"; planId: string }
   | { kind: "await_pro_currency" }
   | { kind: "await_plan_name" }

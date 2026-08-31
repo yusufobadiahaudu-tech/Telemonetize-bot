@@ -1,4 +1,5 @@
 import type { Currency } from "@/lib/currency";
+import type { PayoutDraft } from "@/lib/payouts";
 import type {
   Community,
   FilterAction,
@@ -31,8 +32,10 @@ export type Effect =
       platformPlan: "trial" | "pro";
       bankCode: string;
       accountNumber: string;
+      payout?: PayoutDraft;
     }
-  | { type: "connect_bank"; bankCode: string; accountNumber: string }
+  | { type: "connect_bank"; bankCode: string; accountNumber: string; payout?: PayoutDraft }
+  | { type: "connect_payout"; payout: PayoutDraft }
   | { type: "add_plan"; name: string; priceUsd: number }
   | { type: "add_filter"; keyword: string; action: FilterAction }
   | { type: "scan"; text: string }
