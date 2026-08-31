@@ -18,7 +18,7 @@ function checkoutReply(opts: {
     buttons.push([{ label: "Simulate charge.success", payload: `simcharge:${opts.reference}`, tone: "primary" }]);
   }
   return {
-    text: `${opts.title}\n\nPaystack checkout is open.\n${opts.authorizationUrl}\n\nThe join link is minted only after charge.success.`,
+    text: `${opts.title}\n\nCheckout is open.\n${opts.authorizationUrl}\n\nThe join link is minted only after charge.success.`,
     buttons,
     kind: "invoice",
   };
@@ -99,6 +99,7 @@ function applyClientEffect(effect: Effect): BotReply[] {
       const community = store.createCommunity(effect.name, effect.priceUsd, effect.platformPlan, {
         bankCode: effect.bankCode,
         accountNumber: effect.accountNumber,
+        payout: effect.payout,
       });
       const dest = destinationFor(community);
       return [
@@ -114,9 +115,24 @@ function applyClientEffect(effect: Effect): BotReply[] {
       ];
     }
     case "connect_bank":
+      if (effect.payout) {
+        return [
+          {
+            text: store.connectPayout(effect.payout),
+            buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
+          },
+        ];
+      }
       return [
         {
           text: store.connectBank(effect.bankCode, effect.accountNumber),
+          buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
+        },
+      ];
+    case "connect_payout":
+      return [
+        {
+          text: store.connectPayout(effect.payout),
           buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
         },
       ];
