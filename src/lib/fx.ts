@@ -102,7 +102,7 @@ export function formatQuote(quote: FxQuote): string {
   const rateLine =
     quote.payCurrency === "USD"
       ? `List price ${list}`
-      : `List price ${list}\nYou pay ${pay}\nMid-market 1 USD = ${quote.midRate.toFixed(4)} ${quote.payCurrency}\nConversion fee ${feePct}%`;
+      : `List price ${list}\nYou pay ${pay}\nMid-market 1 USD = ${quote.midRate.toFixed(4)} ${quote.payCurrency}\nConversion fee ${feePct}%${quote.feeMinor ? ` (${formatCharge(Math.round((quote.feeMinor / quote.customerRate)), "USD")})` : ""}`;
   return `${rateLine}\nCreator receives ${creator} in ${currencyLabel(quote.payoutCurrency)} after the platform cut.`;
 }
 
