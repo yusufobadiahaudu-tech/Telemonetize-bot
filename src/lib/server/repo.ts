@@ -33,6 +33,11 @@ type CreatorRow = {
   bank_code: string | null;
   account_number: string | null;
   account_name: string | null;
+  payout_rail: string | null;
+  payout_country: string | null;
+  payout_currency: string | null;
+  payout_handle: string | null;
+  fx_fee_bps: number | null;
 };
 
 function toCommunity(row: CreatorRow): Community {
@@ -56,6 +61,11 @@ function toCommunity(row: CreatorRow): Community {
     bankCode: row.bank_code,
     accountNumber: row.account_number,
     accountName: row.account_name,
+    payoutRail: (row.payout_rail as Community["payoutRail"]) ?? (row.payout_connected ? "bank" : null),
+    payoutCountry: row.payout_country ?? (row.bank_code ? "NG" : null),
+    payoutCurrency: (row.payout_currency as Community["payoutCurrency"]) || "USD",
+    payoutHandle: row.payout_handle ?? row.account_number,
+    fxFeeBps: row.fx_fee_bps ?? 150,
   };
 }
 
@@ -204,7 +214,9 @@ export async function loadWorld(actor: Actor): Promise<World> {
     amount: p.amount,
     currency: (p.currency as Currency) || "USD",
     chargedMinor: p.charged_minor,
-    provider: (p.provider === "transfer" ? "transfer" : "card") as Provider,
+    provider: (["card", "transfer", "mobile_money", "paypal", "stripe"].includes(p.provider)
+      ? p.provider
+      : "card") as Provider,
     providerRef: p.provider_ref,
     status: p.status,
     platformFee: p.platform_fee,
