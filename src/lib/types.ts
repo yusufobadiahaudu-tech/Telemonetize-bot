@@ -42,6 +42,7 @@ export type Community = {
   payoutCurrency: Currency;
   payoutHandle: string | null;
   fxFeeBps: number;
+  bindToken?: string | null;
 };
 
 export type Plan = {

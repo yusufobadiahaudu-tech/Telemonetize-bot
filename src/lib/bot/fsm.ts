@@ -17,6 +17,7 @@ import {
   providerLabel,
   relativeTime,
 } from "@/lib/format";
+import { quoteConversion, checkoutQuoteLines } from "@/lib/fx";
 import { platformSnapshot } from "@/lib/platform";
 import { botMention } from "@/lib/product";
 import type { InlineBtn, Plan, Provider } from "@/lib/types";
@@ -52,7 +53,23 @@ const CUSTOMER_MAIN: InlineBtn[][] = [
   ],
 ];
 
+function liveMain(world: World): InlineBtn[][] {
+  const rows: InlineBtn[][] = [
+    [
+      { label: "Join a group", payload: "discover", tone: "primary" },
+      { label: "I run a group", payload: "become_creator" },
+    ],
+    [
+      { label: "My seats", payload: "my" },
+      { label: "How it works", payload: "help" },
+    ],
+  ];
+  if (world.operator) rows.push([{ label: "Your take", payload: "take" }]);
+  return rows;
+}
+
 function menu(world: World): InlineBtn[][] {
+  if (world.live) return liveMain(world);
   return world.role === "member" && world.actingAs === "self" ? CUSTOMER_MAIN : MAIN;
 }
 
@@ -146,25 +163,42 @@ function out(
   };
 }
 
-export function startWelcome(): BotReply[] {
+export function startWelcome(world?: World): BotReply[] {
   return [
     {
-      text: `You own this bot.\n\nCreators subscribe and get an ID — like LA-ADA. They bind a group name and a bank account to that ID. Member money for the ID goes to that account. Your percentage credits your Telegram wallet.\n\nCustomers send the ID or the group name to ${botMention()}. They pay in dollars — or another currency — by card or bank transfer. I send the join link after Paystack confirms. They never see the split.\n\nIf they do not renew, I kick them. A server cron runs that loop; /loop is a manual override.`,
-      buttons: MAIN,
+      text: `You own this bot.\n\nCreators subscribe and get an ID — like LA-ADA. They bind a group name and a Nigerian bank account to that ID. Member money for the ID goes to that account via Paystack. Your percentage credits your Telegram wallet.\n\nCustomers send the ID or the group name to ${botMention()}. They pay in dollars — or another currency — by card or bank transfer. I send the join link after Paystack confirms. They never see the split.\n\nIf they do not renew, I kick them. A server cron runs that loop; /loop is a manual override.`,
+      buttons: world ? menu(world) : MAIN,
     },
   ];
 }
 
-export function customerWelcome(): BotReply[] {
+export function customerWelcome(world?: World): BotReply[] {
   return [
     {
       text: `Send a creator ID or the group name. Dollar is the list price — pay in USD or another currency, by card or bank transfer. I send the join link after payment confirms.`,
-      buttons: CUSTOMER_MAIN,
+      buttons: world ? menu(world) : CUSTOMER_MAIN,
     },
   ];
 }
 
 function help(world: World): ReduceResult {
+  if (world.live) {
+    const member = !world.operator && (world.role === "member" || world.actingAs === "self");
+    if (member && world.role === "member" && !world.operator) {
+      return out(world, [
+        {
+          text: `Send a creator ID or the group name.\n\nPick a plan. Dollar is the list price. Pay in USD, or another currency, by card or bank transfer. I send a one-time join link after Paystack confirms.\n\nAlready in? /my`,
+          buttons: menu(world),
+        },
+      ]);
+    }
+    return out(world, [
+      {
+        text: `How it works\n\n1. Tap I run a group — trial at 8%, or Pro $15/month at 5%.\n2. Bind a Nigerian bank account. Paystack splits each member charge to that NUBAN. Other payout rails are paused.\n3. Add ${botMention()} as admin (Invite users + Ban users) from the Telegram account that owns the ID, or send /bind TOKEN in the group. I do not bind by title.\n4. Customers send your ID. They pay by card or bank transfer. I mint the join link after Paystack confirms.\n5. Cron retries, warns, then kicks anyone who does not renew. /loop is a manual override.\n\n/studio  /id  /payout  /kick @user  /loop`,
+        buttons: menu(world),
+      },
+    ]);
+  }
   if (world.role === "member" && world.actingAs === "self") {
     return out(world, [
       {
@@ -254,10 +288,19 @@ function showPlan(world: World, planId: string): ReduceResult {
 function chooseMethod(world: World, planId: string, currency: Currency): ReduceResult {
   const plan = world.plans.find((p) => p.id === planId);
   if (!plan) return out(world, [{ text: "Plan not found." }]);
+  const community = world.communities.find((x) => x.id === plan.communityId);
+  const quote = quoteConversion({
+    listUsdCents: plan.priceUsd,
+    payCurrency: currency,
+    payoutCurrency: community?.payoutCurrency || "USD",
+    feeBps: community?.fxFeeBps ?? 150,
+    platformFeeBps: community?.feeBps ?? 800,
+  });
   const amount = formatCharge(plan.priceUsd, currency);
+  const quoteText = checkoutQuoteLines(quote);
   return out(world, [
     {
-      text: `Pay ${amount} (${currency}).\n\nCard or bank transfer. I send the join link after Paystack confirms the charge — not before.`,
+      text: `Pay ${amount} (${currency}).\n${quoteText}\n\nCard or bank transfer. I send the join link after Paystack confirms the charge — not before.`,
       buttons: [
         [{ label: `Card · ${amount}`, payload: `pay:${plan.id}:${currency}:card`, tone: "primary" }],
         [{ label: `Bank transfer · ${amount}`, payload: `pay:${plan.id}:${currency}:transfer` }],
@@ -365,12 +408,19 @@ function becomeCreator(world: World): ReduceResult {
     next,
     [
       {
-        text: "Creators subscribe to this bot. Then they get an ID.\n\nTrial — 14 days free. 8% of each member payment credits the operator Telegram wallet.\nPro — $15 / month by card or bank transfer, in USD or another currency. 5% of each member payment.\n\nAfter they pay, they bind a group name and a bank account to the ID, then add this bot as admin. Their share hits that account. Customers pay in any listed currency by card or transfer, and never see the split.",
-        buttons: [
-          [{ label: "Start 14-day trial", payload: "creator_plan:trial", tone: "primary" }],
-          [{ label: "Pay Pro · $15 / month", payload: "pro_pay" }],
-          [{ label: "Walk Adaeze’s desk (demo)", payload: "as_adaeze" }],
-        ],
+        text: world.live
+          ? "Creators subscribe to this bot. Then they get an ID.\n\nTrial — 14 days free. 8% of each member payment credits the operator Telegram wallet.\nPro — $15 / month by card or bank transfer, in USD or another currency. 5% of each member payment.\n\nAfter they pay, they attach a Nigerian bank account, then add this bot as admin from the account that owns the ID (or send /bind TOKEN in the group). Their share hits that NUBAN via Paystack. Other payout rails are paused. Customers pay by card or transfer, and never see the split."
+          : "Creators subscribe to this bot. Then they get an ID.\n\nTrial — 14 days free. 8% of each member payment credits the operator Telegram wallet.\nPro — $15 / month by card or bank transfer, in USD or another currency. 5% of each member payment.\n\nAfter they pay, they bind a group name and a bank account to the ID, then add this bot as admin. Their share hits that account. Customers pay in any listed currency by card or transfer, and never see the split.",
+        buttons: world.live
+          ? [
+              [{ label: "Start 14-day trial", payload: "creator_plan:trial", tone: "primary" }],
+              [{ label: "Pay Pro · $15 / month", payload: "pro_pay" }],
+            ]
+          : [
+              [{ label: "Start 14-day trial", payload: "creator_plan:trial", tone: "primary" }],
+              [{ label: "Pay Pro · $15 / month", payload: "pro_pay" }],
+              [{ label: "Walk Adaeze’s desk (demo)", payload: "as_adaeze" }],
+            ],
       },
     ],
     nextRole,
@@ -466,7 +516,7 @@ function studio(world: World): ReduceResult {
   const dest = destinationFor(community);
   if (!dest) return out(world, attachAccountPrompt(community.code));
   const hasIbrahim = members.some((m) => m.username === "ibrahim_ngn");
-  const extra: InlineBtn[] = hasIbrahim
+  const extra: InlineBtn[] = !world.live && hasIbrahim
     ? [{ label: "Fail @ibrahim card", payload: "fail:ibrahim_ngn", tone: "danger" }]
     : [];
   return out(world, [
@@ -498,13 +548,17 @@ function requireOwner(world: World) {
 function notCreator(world: World): ReduceResult {
   return out(world, [
     {
-      text: "That command is for creators who already have an ID. Tap I run a group to subscribe, or walk Adaeze’s desk to see a live group.",
-      buttons: [
-        [
-          { label: "I run a group", payload: "become_creator", tone: "primary" },
-          { label: "Walk Adaeze’s desk", payload: "as_adaeze" },
-        ],
-      ],
+      text: world.live
+        ? "That command is for creators who already have an ID. Tap I run a group to subscribe."
+        : "That command is for creators who already have an ID. Tap I run a group to subscribe, or walk Adaeze’s desk to see a live group.",
+      buttons: world.live
+        ? [[{ label: "I run a group", payload: "become_creator", tone: "primary" }]]
+        : [
+            [
+              { label: "I run a group", payload: "become_creator", tone: "primary" },
+              { label: "Walk Adaeze’s desk", payload: "as_adaeze" },
+            ],
+          ],
     },
   ]);
 }
@@ -616,7 +670,15 @@ function earnings(world: World): ReduceResult {
 }
 
 function yourTake(world: World): ReduceResult {
-  if (world.role === "member" && world.actingAs === "self") {
+  if (world.live && !world.operator) {
+    return out(world, [
+      {
+        text: "That’s for the person who owns this bot.",
+        buttons: menu(world),
+      },
+    ]);
+  }
+  if (!world.operator && world.role === "member" && world.actingAs === "self") {
     return out(world, [
       {
         text: "That’s for the person who owns this bot.",
@@ -678,6 +740,7 @@ function loop(world: World): ReduceResult {
 }
 
 function failCard(world: World, username: string): ReduceResult {
+  if (world.live) return out(world, [{ text: "That demo control is off." }]);
   const community = requireOwner(world);
   if (!community) return notCreator(world);
   const handle = username.replace(/^@/, "").toLowerCase();
@@ -871,7 +934,10 @@ export function handleInput(world: World, raw: string): ReduceResult {
   const arg = rest.join(" ").trim();
   const c = (cmd ?? "").toLowerCase();
 
-  if (c === "/start" || c === "start") return out(world, startWelcome());
+  if (c === "/start" || c === "start") {
+    if (world.live && !world.operator) return out(world, customerWelcome(world));
+    return out(world, startWelcome(world));
+  }
   if (c === "/help" || c === "help") return help(world);
   if (c === "/discover" || c === "discover") return discover(world);
   if (c === "/my" || c === "my") return mySeats(world);
@@ -968,6 +1034,9 @@ export function handleCallback(world: World, payload: string): ReduceResult {
     return out(world, [{ text: "Cancelled.", buttons: menu(world) }], { pending: null });
   }
   if (payload === "as_adaeze") {
+    if (world.live) {
+      return out(world, [{ text: "That demo is only on the web simulator.", buttons: menu(world) }]);
+    }
     const next = { ...world, role: "creator" as const, actingAs: "adaeze" as const };
     return studio(next);
   }
@@ -1055,6 +1124,9 @@ export function handleCallback(world: World, payload: string): ReduceResult {
     });
   }
   if (payload.startsWith("simcharge:")) {
+    if (world.live) {
+      return out(world, [{ text: "Payment confirms from Paystack, not from this button." }]);
+    }
     const reference = payload.slice("simcharge:".length);
     if (!reference) return out(world, [{ text: "Missing payment reference." }]);
     return out(world, [], { effects: [{ type: "fulfill", reference }] });

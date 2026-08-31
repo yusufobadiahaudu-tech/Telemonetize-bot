@@ -27,6 +27,10 @@ export type World = {
   modEvents: ModEvent[];
   reminded: string[];
   now: number;
+  /** True when driven by the live Telegram webhook — demo controls stay off. */
+  live?: boolean;
+  /** Operator Telegram wallet (/take) — never inferred from role in live mode. */
+  operator?: boolean;
 };
 
 export function ownedCommunity(world: World) {
@@ -73,6 +77,40 @@ export function issueCreatorCode(name: string, taken: Set<string>) {
   const letters = name.replace(/[^a-zA-Z]/g, "").toUpperCase().slice(0, 4) || "CRE";
   const suffix = () => Math.random().toString(36).slice(2, 5).toUpperCase();
   let code = `${letters}-${suffix()}`;
-  while (taken.has(code.toLowerCase())) code = `${letters}-${suffix()}`;
+  let guard = 0;
+  while (taken.has(code.toLowerCase()) && guard < 50) {
+    code = `${letters}-${suffix()}`;
+    guard += 1;
+  }
   return code;
 }
+
+export function issueSlug(name: string, taken: Set<string>) {
+  const base =
+    name
+      .toLowerCase()
+      .trim()
+      .replace(/['"]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "my-room";
+  if (!taken.has(base)) return base;
+  let n = 2;
+  let slug = `${base.slice(0, 28)}-${n}`;
+  while (taken.has(slug) && n < 1000) {
+    n += 1;
+    slug = `${base.slice(0, 28)}-${n}`;
+  }
+  return slug;
+}
+
+export function issueBindToken() {
+  const raw = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `BIND-${raw}`;
+}
+
+export function parseBindCommand(text: string): string | null {
+  const m = text.trim().match(/^\/bind(?:@[A-Za-z0-9_]+)?\s+(BIND-[A-Za-z0-9]+)\s*$/i);
+  return m?.[1] ? m[1].toUpperCase() : null;
+}
+

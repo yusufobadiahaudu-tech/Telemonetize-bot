@@ -10,14 +10,17 @@ import { bankByCode } from "@/lib/banks";
 import { institutionLabel, validatePayoutHandle, type PayoutDraft } from "@/lib/payouts";
 import { quoteConversion } from "@/lib/fx";
 import { getRateBook } from "@/lib/server/fx-live";
-import { issueCreatorCode, ownedCommunity } from "@/lib/bot/world";
+import { issueBindToken, issueCreatorCode, issueSlug, ownedCommunity, parseBindCommand } from "@/lib/bot/world";
 import {
   applyTelegramKick,
   checkoutEmail,
+  connectNigerianPayout,
   fulfillPayment,
   startPaystackCheckout,
 } from "./access";
 import { runMoneyLoop } from "./loop";
+import { demoPaymentsEnabled, isOperatorActor } from "./production";
+import { extendPeriodEnd } from "@/lib/format";
 import { ensureAccount, loadWorld, saveSession } from "./repo";
 import {
   answerCallbackQuery,
@@ -148,6 +151,9 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       ];
     }
     case "fulfill": {
+      if (!demoPaymentsEnabled()) {
+        return [{ text: "Payment confirms from Paystack, not from this button." }];
+      }
       const payments = await sql<{
         id: string;
         user_id: string;
@@ -180,7 +186,7 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       ];
     }
     case "kick": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [{ text: "Create a community first." }];
       const handle = effect.username.replace(/^@/, "").toLowerCase();
@@ -207,7 +213,7 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       return [{ text: `Kicked @${member.username}. Invite revoked.` }];
     }
     case "run_loop": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       const r = await runMoneyLoop(community?.id);
       return [
@@ -224,32 +230,59 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
         institution: bankByCode(effect.bankCode)?.name ?? "Bank",
         handle: effect.accountNumber,
       };
+      if (draft.rail !== "bank" || draft.country !== "NG") {
+        return [
+          {
+            text: "Live payouts are Nigerian bank accounts via Paystack. Other rails are paused until each one has a settlement API.",
+          },
+        ];
+      }
       const invalid = validatePayoutHandle(draft);
       if (invalid) return [{ text: invalid }];
       const existing = await sql<{ id: string }>`select id from creators where user_id = ${actor.id} limit 1`;
       if (existing[0]) return [{ text: "You already have a creator ID. /studio" }];
-      const taken = await sql<{ code: string }>`select code from creators`;
-      const code = issueCreatorCode(effect.name, new Set(taken.map((t) => t.code.toLowerCase())));
-      const slug =
-        effect.name
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 32) || "my-room";
+      const takenCodes = await sql<{ code: string }>`select code from creators where code ilike ${`${effect.name.replace(/[^a-zA-Z]/g, "").slice(0, 4) || "CRE"}-%`}`;
+      const allCodes = takenCodes.length
+        ? takenCodes
+        : await sql<{ code: string }>`select code from creators`;
+      const code = issueCreatorCode(effect.name, new Set(allCodes.map((t) => t.code.toLowerCase())));
+      const takenSlugs = await sql<{ slug: string }>`select slug from creators`;
+      const slug = issueSlug(effect.name, new Set(takenSlugs.map((s) => s.slug)));
+      const bindToken = issueBindToken();
       const id = nid("cre");
       const fee = effect.platformPlan === "pro" ? 500 : 800;
       const inst = institutionLabel(draft);
       const handle = draft.handle.trim();
+      let accountName = actor.name.toUpperCase();
+      let subaccount: string | null = null;
+      let verified = false;
+      try {
+        const payout = await connectNigerianPayout({
+          creatorId: id,
+          bankCode: effect.bankCode,
+          accountNumber: handle,
+          businessName: effect.name,
+          feeBps: fee,
+          actorName: actor.name,
+        });
+        accountName = payout.accountName;
+        subaccount = payout.subaccount;
+        verified = payout.verified;
+      } catch (err) {
+        return [{ text: err instanceof Error ? err.message : "Could not attach that NUBAN." }];
+      }
       await sql`
         insert into creators (
           id, user_id, slug, code, name, bio, fee_bps, platform_plan,
           bank_name, bank_code, account_number, account_name, payout_connected, payout_connected_at,
-          payout_rail, payout_country, payout_currency, payout_handle, fx_fee_bps
+          payout_rail, payout_country, payout_currency, payout_handle, fx_fee_bps,
+          bind_token, paystack_subaccount
         ) values (
           ${id}, ${actor.id}, ${slug}, ${code}, ${effect.name}, 'Paid Telegram group on TeleMonetize.',
           ${fee}, ${effect.platformPlan}, ${inst}, ${effect.bankCode}, ${handle},
-          ${actor.name.toUpperCase()}, true, now(),
-          ${draft.rail}, ${draft.country}, ${draft.currency}, ${handle}, 150
+          ${accountName}, true, now(),
+          ${draft.rail}, ${draft.country}, ${draft.currency}, ${handle}, 150,
+          ${bindToken}, ${subaccount}
         )
       `;
       await sql`
@@ -258,13 +291,13 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       `;
       return [
         {
-          text: `You're live.\n\nCreator ID  ${code}\nGroup  ${effect.name}\nAdd @TeleMonetizeBot as admin with Invite users and Ban users.`,
+          text: `You're live.\n\nCreator ID  ${code}\nGroup  ${effect.name}\nAdd @TeleMonetizeBot as admin with Invite users and Ban users. I bind the group to the Telegram account that added me — not the title.\nOr send /bind ${bindToken} in the group.${verified ? "" : "\nNUBAN saved (Paystack verify skipped in demo)."}`,
           buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
         },
       ];
     }
     case "connect_bank": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [{ text: "Create a community first." }];
       const draft: PayoutDraft = effect.payout ?? {
@@ -274,40 +307,59 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
         institution: bankByCode(effect.bankCode)?.name ?? "Bank",
         handle: effect.accountNumber,
       };
+      if (draft.rail !== "bank" || draft.country !== "NG") {
+        return [
+          {
+            text: "Live payouts are Nigerian bank accounts via Paystack. Other rails are paused until each one has a settlement API.",
+          },
+        ];
+      }
       const invalid = validatePayoutHandle(draft);
       if (invalid) return [{ text: invalid }];
       const inst = institutionLabel(draft);
       const handle = draft.handle.trim();
+      let accountName = actor.name.toUpperCase();
+      let subaccount: string | null = null;
+      let verified = false;
+      try {
+        const payout = await connectNigerianPayout({
+          creatorId: community.id,
+          bankCode: effect.bankCode,
+          accountNumber: handle,
+          businessName: community.name,
+          feeBps: community.feeBps,
+          actorName: actor.name,
+        });
+        accountName = payout.accountName;
+        subaccount = payout.subaccount;
+        verified = payout.verified;
+      } catch (err) {
+        return [{ text: err instanceof Error ? err.message : "Could not attach that NUBAN." }];
+      }
       await sql`
         update creators set
           bank_name = ${inst}, bank_code = ${effect.bankCode}, account_number = ${handle},
-          account_name = ${actor.name.toUpperCase()}, payout_connected = true, payout_connected_at = now(),
+          account_name = ${accountName}, payout_connected = true, payout_connected_at = now(),
           payout_rail = ${draft.rail}, payout_country = ${draft.country},
-          payout_currency = ${draft.currency}, payout_handle = ${handle}
+          payout_currency = ${draft.currency}, payout_handle = ${handle},
+          paystack_subaccount = ${subaccount}
         where id = ${community.id}
       `;
-      return [{ text: `ID ${community.code} now pays out via ${draft.rail} in ${draft.currency} to ${inst}.` }];
+      return [
+        {
+          text: `ID ${community.code} now pays out to ${inst} · ${accountName}.${verified ? "" : " NUBAN saved (Paystack verify skipped in demo)."}`,
+        },
+      ];
     }
     case "connect_payout": {
-      const world = await loadWorld(actor);
-      const community = ownedCommunity(world);
-      if (!community) return [{ text: "Create a community first." }];
-      const invalid = validatePayoutHandle(effect.payout);
-      if (invalid) return [{ text: invalid }];
-      const inst = institutionLabel(effect.payout);
-      const handle = effect.payout.handle.trim();
-      await sql`
-        update creators set
-          bank_name = ${inst}, bank_code = ${effect.payout.country}, account_number = ${handle},
-          account_name = ${actor.name.toUpperCase()}, payout_connected = true, payout_connected_at = now(),
-          payout_rail = ${effect.payout.rail}, payout_country = ${effect.payout.country},
-          payout_currency = ${effect.payout.currency}, payout_handle = ${handle}
-        where id = ${community.id}
-      `;
-      return [{ text: `ID ${community.code} now pays out via ${effect.payout.rail} in ${effect.payout.currency} to ${inst}.` }];
+      return [
+        {
+          text: "Live payouts are Nigerian bank accounts via Paystack. Other rails are paused until each one has a settlement API. Pick a Nigerian bank, then send the 10-digit NUBAN.",
+        },
+      ];
     }
     case "add_plan": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [{ text: "Create a community first." }];
       await sql`
@@ -317,7 +369,8 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       return [{ text: `${effect.name} is live.` }];
     }
     case "fail_card": {
-      const world = await loadWorld(actor);
+      if (!demoPaymentsEnabled()) return [{ text: "That demo control is off." }];
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [];
       const handle = effect.username.replace(/^@/, "").toLowerCase();
@@ -330,22 +383,27 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
       return [];
     }
     case "extend": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [{ text: "Create a community first." }];
       const handle = effect.username.replace(/^@/, "").toLowerCase();
       const member = world.members.find((m) => m.username.toLowerCase() === handle);
       if (!member) return [{ text: `No member @${handle}.` }];
+      const current = await sql<{ current_period_end: string | null }>`
+        select current_period_end from subscriptions
+        where creator_id = ${community.id} and user_id = ${member.userId}
+        limit 1
+      `;
       await sql`
         update subscriptions set
           status = 'active',
-          current_period_end = ${new Date(Date.now() + effect.days * 86_400_000).toISOString()}
+          current_period_end = ${extendPeriodEnd(current[0]?.current_period_end, effect.days)}
         where creator_id = ${community.id} and user_id = ${member.userId}
       `;
       return [{ text: `Extended @${member.username} by ${effect.days} days.` }];
     }
     case "add_filter": {
-      const world = await loadWorld(actor);
+      const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
       const community = ownedCommunity(world);
       if (!community) return [];
       await sql`
@@ -368,7 +426,7 @@ async function applyEffect(actor: Actor, effect: Effect): Promise<BotReply[]> {
 
 export async function dispatchTelegramEvent(actor: Actor, event: BotEvent): Promise<BotReply[]> {
   await ensureAccount(actor);
-  const world = await loadWorld(actor);
+  const world = await loadWorld(actor, { live: true, operator: isOperatorActor(actor) });
   const result = reduce(world, event);
   await saveSession(actor.id, result.pending, result.role);
   const extra: BotReply[] = [];
@@ -390,6 +448,46 @@ function keyboard(replies: BotReply[]) {
   );
 }
 
+async function bindChatToCreator(opts: {
+  chat: { id: number; type: string; title?: string };
+  adderId?: number;
+  bindToken?: string | null;
+}) {
+  const sql = await getSql();
+  const type = opts.chat.type === "channel" ? "channel" : "group";
+  const chatId = String(opts.chat.id);
+  const title = opts.chat.title ?? null;
+
+  if (opts.bindToken) {
+    const token = opts.bindToken.trim().toUpperCase();
+    const rows = await sql<{ id: string; code: string; name: string }>`
+      update creators set
+        telegram_chat_id = ${chatId},
+        telegram_chat_title = ${title},
+        telegram_chat_type = ${type}
+      where bind_token = ${token}
+        and (telegram_chat_id is null or telegram_chat_id = ${chatId})
+      returning id, code, name
+    `;
+    return rows[0] ?? null;
+  }
+
+  if (opts.adderId) {
+    const ownerId = `tg-${opts.adderId}`;
+    const rows = await sql<{ id: string; code: string; name: string }>`
+      update creators set
+        telegram_chat_id = ${chatId},
+        telegram_chat_title = ${title},
+        telegram_chat_type = ${type}
+      where user_id = ${ownerId}
+        and (telegram_chat_id is null or telegram_chat_id = ${chatId})
+      returning id, code, name
+    `;
+    return rows[0] ?? null;
+  }
+  return null;
+}
+
 export async function processTelegramUpdate(update: TelegramUpdate) {
   const token = await platformToken();
   if (!token) return;
@@ -401,15 +499,20 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
   ) {
     const chat = added.chat;
     if (chat.type === "group" || chat.type === "supergroup" || chat.type === "channel") {
-      const sql = await getSql();
-      const type = chat.type === "channel" ? "channel" : "group";
-      await sql`
-        update creators set
-          telegram_chat_id = ${String(chat.id)},
-          telegram_chat_title = ${chat.title ?? null},
-          telegram_chat_type = ${type}
-        where telegram_chat_id is null and lower(name) = ${chat.title?.toLowerCase() ?? ""}
-      `;
+      const bound = await bindChatToCreator({ chat, adderId: added.from?.id });
+      if (bound) {
+        await sendMessage(
+          token,
+          chat.id,
+          `Bound “${chat.title ?? "this chat"}” to creator ID ${bound.code}. Invites and kicks now run here.`,
+        );
+      } else {
+        await sendMessage(
+          token,
+          chat.id,
+          "I bind a group to the Telegram account that added me — not the title. Add me from the account that owns the creator ID, or send /bind TOKEN here.",
+        );
+      }
     }
   }
 
@@ -423,15 +526,38 @@ export async function processTelegramUpdate(update: TelegramUpdate) {
     };
     const replies = await dispatchTelegramEvent(actor, { type: "callback", payload: cb.data });
     await answerCallbackQuery(token, cb.id);
+    const dest = cb.message?.chat.type === "private" ? cb.from.id : cb.message?.chat.id ?? cb.from.id;
     for (const reply of replies) {
-      await sendMessage(token, cb.from.id, reply.text, keyboard([reply]));
+      await sendMessage(token, dest, reply.text, keyboard([reply]));
     }
     return;
   }
 
   const message = update.message;
-  if (message?.chat.type === "private" && message.from && message.text) {
+  if (!message?.from || !message.text) return;
+
+  if (message.chat.type === "private") {
     await handlePrivateMessage(message.from, message.text);
+    return;
+  }
+
+  if (message.chat.type === "group" || message.chat.type === "supergroup" || message.chat.type === "channel") {
+    const bindToken = parseBindCommand(message.text);
+    if (!bindToken) return;
+    const bound = await bindChatToCreator({ chat: message.chat, bindToken });
+    if (bound) {
+      await sendMessage(
+        token,
+        message.chat.id,
+        `Bound “${message.chat.title ?? "this chat"}” to creator ID ${bound.code}. Invites and kicks now run here.`,
+      );
+    } else {
+      await sendMessage(
+        token,
+        message.chat.id,
+        "That bind token did not match an unbound creator ID. Send the token from /studio, or add me from the account that owns the ID.",
+      );
+    }
   }
 }
 

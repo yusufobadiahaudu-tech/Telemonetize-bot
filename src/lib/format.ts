@@ -97,6 +97,14 @@ export function periodEnd(interval: string, start = new Date()): Date {
   return end;
 }
 
+/** Add days onto the later of now and the current period end. */
+export function extendPeriodEnd(periodEndIso: string | null | undefined, days: number, now = Date.now()): string {
+  const n = Math.max(1, Math.min(365, Math.floor(days) || 7));
+  const current = periodEndIso ? new Date(periodEndIso).getTime() : NaN;
+  const base = Number.isFinite(current) && current > now ? current : now;
+  return new Date(base + n * 86_400_000).toISOString();
+}
+
 export function providerLabel(provider: string): string {
   if (provider === "card") return "card";
   if (provider === "transfer") return "bank transfer";

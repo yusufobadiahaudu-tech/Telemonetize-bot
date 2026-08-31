@@ -15,9 +15,12 @@ async function handle(request: Request) {
   const rows = await sql<{ telegram_webhook_secret: string | null }>`
     select telegram_webhook_secret from platform_bot where id = 'singleton' limit 1
   `;
-  const expected = rows[0]?.telegram_webhook_secret || process.env.TELEGRAM_WEBHOOK_SECRET || "";
+  const expected = (process.env.TELEGRAM_WEBHOOK_SECRET?.trim() || rows[0]?.telegram_webhook_secret || "").trim();
+  if (!expected) {
+    return new Response("webhook secret not configured", { status: 503 });
+  }
   const received = request.headers.get("x-telegram-bot-api-secret-token");
-  if (expected && !secretsMatch(expected, received)) {
+  if (!secretsMatch(expected, received)) {
     return new Response("invalid secret", { status: 401 });
   }
 

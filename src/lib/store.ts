@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { BOT_CHAT_ID } from "./constants";
 import { nid } from "./utils";
-import { periodEnd, splitAmounts } from "./format";
+import { periodEnd, splitAmounts, extendPeriodEnd } from "./format";
 import { bankByCode, digitsOnly, isNuban } from "./banks";
 import type { Currency } from "./currency";
 import { usdToMinor } from "./currency";
@@ -603,8 +603,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           (s) => s.communityId === community.id && s.userId === member.userId,
         );
         if (!sub) return `No subscription for @${handle}.`;
-        const next = new Date(sub.periodEnd);
-        next.setDate(next.getDate() + days);
+        const periodEndIso = extendPeriodEnd(sub.periodEnd, days);
         set((s) => ({
           subscriptions: s.subscriptions.map((x) =>
             x.id === sub.id
@@ -614,7 +613,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
                   autoRenew: true,
                   cardFailing: false,
                   retryCount: 0,
-                  periodEnd: next.toISOString(),
+                  periodEnd: periodEndIso,
                 }
               : x,
           ),
@@ -625,7 +624,7 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
           ),
         }));
         get().log(community.id, "extend", `Extended @${member.username} by ${days} days.`);
-        return `Extended @${member.username} by ${days} days. New end ${next.toISOString().slice(0, 10)}.`;
+        return `Extended @${member.username} by ${days} days. New end ${periodEndIso.slice(0, 10)}.`;
       },
 
       connectBank: (bankCode, accountNumber) => {
@@ -646,6 +645,11 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
                   bankCode: bank.code,
                   accountNumber: digits,
                   accountName,
+                  payoutRail: "bank" as const,
+                  payoutCountry: "NG",
+                  payoutCurrency: "NGN" as const,
+                  payoutHandle: digits,
+                  fxFeeBps: 150,
                 }
               : c,
           ),
@@ -671,6 +675,9 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
                   bankCode: null,
                   accountNumber: null,
                   accountName: null,
+                  payoutRail: null,
+                  payoutCountry: null,
+                  payoutHandle: null,
                 }
               : c,
           ),
@@ -700,13 +707,27 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
         const feeBps = platformPlan === "pro" ? 500 : 800;
         let payoutFields: Pick<
           Community,
-          "payoutConnected" | "bankName" | "bankCode" | "accountNumber" | "accountName"
+          | "payoutConnected"
+          | "bankName"
+          | "bankCode"
+          | "accountNumber"
+          | "accountName"
+          | "payoutRail"
+          | "payoutCountry"
+          | "payoutCurrency"
+          | "payoutHandle"
+          | "fxFeeBps"
         > = {
           payoutConnected: false,
           bankName: null,
           bankCode: null,
           accountNumber: null,
           accountName: null,
+          payoutRail: null,
+          payoutCountry: null,
+          payoutCurrency: "NGN",
+          payoutHandle: null,
+          fxFeeBps: 150,
         };
         if (payout) {
           const digits = digitsOnly(payout.accountNumber);
@@ -718,6 +739,11 @@ export const useApp = create<AppState & AppActions>()((set, get) => ({
               bankCode: bank.code,
               accountNumber: digits,
               accountName: me.name.toUpperCase(),
+              payoutRail: "bank",
+              payoutCountry: "NG",
+              payoutCurrency: "NGN",
+              payoutHandle: digits,
+              fxFeeBps: 150,
             };
           }
         }

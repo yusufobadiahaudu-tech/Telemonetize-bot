@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { ADAEZE, SEED_COMMUNITIES, SEED_MEMBERS, SEED_PAYMENTS, SEED_PLANS, SEED_SUBS, YOU } from "../seed.ts";
 import { numericTelegramId } from "../server/telegram-api.ts";
 import { reduce } from "./fsm.ts";
-import type { World } from "./world.ts";
+import { issueBindToken, issueSlug, parseBindCommand, type World } from "./world.ts";
 
 function world(over: Partial<World> = {}): World {
   return {
@@ -93,61 +93,90 @@ describe("bot FSM", () => {
     assert.equal(w.members.find((m) => m.username === "ibrahim_ngn")?.status, before);
   });
 
-  it("routes simcharge to fulfill — still no Zustand", () => {
+  it("routes simcharge to fulfill in the demo world — still no Zustand", () => {
     const result = reduce(world(), { type: "callback", payload: "simcharge:PSK_demo" });
     assert.deepEqual(result.effects, [{ type: "fulfill", reference: "PSK_demo" }]);
     assert.equal(result.replies.length, 0);
   });
 
-  it("walks rail → country → currency → PayPal handle for a new creator ID", () => {
-    let w = world({
-      pending: { kind: "await_community_rail", name: "Berlin Desk", priceUsd: 2000, platformPlan: "trial" },
+  it("issues create_community after NG bank + NUBAN", () => {
+    const base = world({
       role: "creator",
+      pending: { kind: "await_community_bank", name: "Lagos Desk", priceUsd: 1500, platformPlan: "trial" },
     });
-    const rail = reduce(w, { type: "callback", payload: "crail:paypal" });
-    assert.equal(rail.pending?.kind, "await_community_country");
-    w = { ...w, pending: rail.pending };
-    const country = reduce(w, { type: "callback", payload: "pcountry:DE".replace("DE", "EU") });
-    assert.equal(country.pending?.kind, "await_community_currency");
-    w = { ...w, pending: country.pending };
-    const settle = reduce(w, { type: "callback", payload: "settle:EUR" });
-    assert.equal(settle.pending?.kind, "await_community_handle");
-    w = { ...w, pending: settle.pending };
-    const done = reduce(w, { type: "input", text: "ada@example.com" });
+    const bank = reduce(base, { type: "callback", payload: "bank:058" });
+    assert.equal(bank.pending?.kind, "await_community_nuban");
+    const done = reduce({ ...base, pending: bank.pending }, { type: "input", text: "0123444421" });
     assert.equal(done.effects[0]?.type, "create_community");
     if (done.effects[0]?.type === "create_community") {
-      assert.equal(done.effects[0].payout?.rail, "paypal");
-      assert.equal(done.effects[0].payout?.currency, "EUR");
-      assert.equal(done.effects[0].payout?.handle, "ada@example.com");
+      assert.equal(done.effects[0].bankCode, "058");
+      assert.equal(done.effects[0].accountNumber, "0123444421");
     }
   });
 
-  it("changes an existing ID to M-Pesa without minting a new community", () => {
-    const base = world({
-      actor: ADAEZE,
-      role: "creator",
-      actingAs: "adaeze",
-      pending: { kind: "await_payout_rail" },
-    });
-    const rail = reduce(base, { type: "callback", payload: "rail:mobile_money" });
-    assert.equal(rail.pending?.kind, "await_payout_country");
-    const country = reduce({ ...base, pending: rail.pending }, { type: "callback", payload: "pcountry:KE" });
-    assert.equal(country.pending?.kind, "await_payout_currency");
-    const settle = reduce({ ...base, pending: country.pending }, { type: "callback", payload: "settle:KES" });
-    assert.equal(settle.pending?.kind, "await_payout_handle");
-    const handle = reduce({ ...base, pending: settle.pending }, { type: "input", text: "254711000000" });
-    assert.equal(handle.effects[0]?.type, "connect_payout");
-    if (handle.effects[0]?.type === "connect_payout") {
-      assert.equal(handle.effects[0].payout.rail, "mobile_money");
-      assert.equal(handle.effects[0].payout.country, "KE");
-      assert.equal(handle.effects[0].payout.currency, "KES");
-    }
-  });
-
-  it("quotes conversion before emitting a mobile-money checkout", () => {
+  it("quotes conversion before card or transfer — no mobile money", () => {
     const result = reduce(world(), { type: "callback", payload: "ccy:pln_la_premium:EUR" });
     assert.match(result.replies[0]?.text ?? "", /FX fee|You pay|List/);
-    assert.ok(result.replies[0]?.buttons?.some((row) => row.some((b) => b.payload.includes("mobile_money"))));
+    const payloads = result.replies[0]?.buttons?.flat().map((b) => b.payload) ?? [];
+    assert.ok(payloads.some((p) => p.includes(":card")));
+    assert.ok(payloads.some((p) => p.includes(":transfer")));
+    assert.ok(!payloads.some((p) => p.includes("mobile_money")));
+    assert.ok(!payloads.some((p) => p.includes("paypal")));
+  });
+});
+
+describe("live FSM gates", () => {
+  it("hides Adaeze, simcharge, and fail-card on a live world", () => {
+    const w = world({ live: true });
+    const start = reduce(w, { type: "input", text: "/start" });
+    const startPayloads = start.replies[0]?.buttons?.flat().map((b) => b.payload) ?? [];
+    assert.ok(!startPayloads.includes("as_adaeze"));
+    assert.ok(!startPayloads.includes("take"));
+
+    const sim = reduce(w, { type: "callback", payload: "simcharge:PSK_demo" });
+    assert.equal(sim.effects.length, 0);
+    assert.match(sim.replies[0]?.text ?? "", /Paystack/i);
+
+    const ada = reduce(w, { type: "callback", payload: "as_adaeze" });
+    assert.equal(ada.actingAs, "self");
+    assert.match(ada.replies[0]?.text ?? "", /simulator/i);
+
+    const fail = reduce(
+      world({ live: true, actor: ADAEZE, role: "creator" }),
+      { type: "callback", payload: "fail:ibrahim_ngn" },
+    );
+    assert.equal(fail.effects.length, 0);
+    assert.match(fail.replies[0]?.text ?? "", /demo control is off/i);
+  });
+
+  it("yourTake requires operator in live mode", () => {
+    const denied = reduce(world({ live: true, operator: false, role: "creator" }), {
+      type: "input",
+      text: "/take",
+    });
+    assert.match(denied.replies[0]?.text ?? "", /owns this bot/i);
+    const allowed = reduce(world({ live: true, operator: true, role: "creator" }), {
+      type: "input",
+      text: "/take",
+    });
+    assert.match(allowed.replies[0]?.text ?? "", /wallet/i);
+  });
+});
+
+describe("slug and bind tokens", () => {
+  it("issueSlug collides to -2 then -3", () => {
+    const taken = new Set(["lagos-desk"]);
+    const second = issueSlug("Lagos Desk", taken);
+    assert.equal(second, "lagos-desk-2");
+    taken.add(second);
+    assert.equal(issueSlug("Lagos Desk", taken), "lagos-desk-3");
+  });
+
+  it("parseBindCommand accepts /bind TOKEN from a group", () => {
+    assert.equal(parseBindCommand("/bind BIND-AB12CD"), "BIND-AB12CD");
+    assert.equal(parseBindCommand("/bind@TeleMonetizeBot BIND-zz99"), "BIND-ZZ99");
+    assert.equal(parseBindCommand("/bind not-a-token"), null);
+    assert.ok(issueBindToken().startsWith("BIND-"));
   });
 });
 

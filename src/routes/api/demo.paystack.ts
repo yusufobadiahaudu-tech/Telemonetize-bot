@@ -1,8 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSql } from "@/lib/db";
 import { fulfillPayment } from "@/lib/server/access";
+import { demoPaymentsEnabled } from "@/lib/server/production";
 
 async function handle(request: Request) {
+  if (!demoPaymentsEnabled()) {
+    return new Response("Not found", { status: 404 });
+  }
   const url = new URL(request.url);
   const reference = url.searchParams.get("ref");
   if (!reference) return new Response("missing ref", { status: 400 });
@@ -16,6 +20,7 @@ async function handle(request: Request) {
     plan_id: string;
     amount: number;
     currency: string;
+    charged_minor: number;
     provider: string;
     provider_ref: string | null;
     status: string;

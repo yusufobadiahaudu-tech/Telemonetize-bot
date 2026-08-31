@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BotRouteImport } from './routes/bot'
+import { Route as PaidRouteImport } from './routes/paid'
 import { Route as ApiCronLoopRouteImport } from './routes/api/cron.loop'
 import { Route as ApiDemoPaystackRouteImport } from './routes/api/demo.paystack'
 import { Route as ApiWebhooksPaystackRouteImport } from './routes/api/webhooks.paystack'
@@ -25,6 +26,11 @@ const IndexRoute = IndexRouteImport.update({
 const BotRoute = BotRouteImport.update({
   id: '/bot',
   path: '/bot',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PaidRoute = PaidRouteImport.update({
+  id: '/paid',
+  path: '/paid',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiCronLoopRoute = ApiCronLoopRouteImport.update({
@@ -56,6 +62,7 @@ const ApiFxRoute = ApiFxRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/paid': typeof PaidRoute
   '/api/cron/loop': typeof ApiCronLoopRoute
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/paid': typeof PaidRoute
   '/api/cron/loop': typeof ApiCronLoopRoute
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
@@ -75,6 +83,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/bot': typeof BotRoute
+  '/paid': typeof PaidRoute
   '/api/cron/loop': typeof ApiCronLoopRoute
   '/api/demo/paystack': typeof ApiDemoPaystackRoute
   '/api/webhooks/paystack': typeof ApiWebhooksPaystackRoute
@@ -86,6 +95,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/bot'
+    | '/paid'
     | '/api/cron/loop'
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
@@ -95,6 +105,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/bot'
+    | '/paid'
     | '/api/cron/loop'
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
@@ -104,6 +115,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/bot'
+    | '/paid'
     | '/api/cron/loop'
     | '/api/demo/paystack'
     | '/api/webhooks/paystack'
@@ -114,6 +126,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BotRoute: typeof BotRoute
+  PaidRoute: typeof PaidRoute
   ApiCronLoopRoute: typeof ApiCronLoopRoute
   ApiDemoPaystackRoute: typeof ApiDemoPaystackRoute
   ApiWebhooksPaystackRoute: typeof ApiWebhooksPaystackRoute
@@ -135,6 +148,13 @@ declare module '@tanstack/react-router' {
       path: '/bot'
       fullPath: '/bot'
       preLoaderRoute: typeof BotRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/paid': {
+      id: '/paid'
+      path: '/paid'
+      fullPath: '/paid'
+      preLoaderRoute: typeof PaidRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/cron/loop': {
@@ -179,6 +199,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BotRoute: BotRoute,
+  PaidRoute: PaidRoute,
   ApiCronLoopRoute: ApiCronLoopRoute,
   ApiDemoPaystackRoute: ApiDemoPaystackRoute,
   ApiWebhooksPaystackRoute: ApiWebhooksPaystackRoute,

@@ -84,6 +84,11 @@ export const SEED_COMMUNITIES: Community[] = [
     bankCode: "058",
     accountNumber: "0123444421",
     accountName: "ADAEZE OKONKWO",
+    payoutRail: "bank",
+    payoutCountry: "NG",
+    payoutCurrency: "NGN",
+    payoutHandle: "0123444421",
+    fxFeeBps: 150,
   },
   {
     id: "cre_nolly",
@@ -105,6 +110,11 @@ export const SEED_COMMUNITIES: Community[] = [
     bankCode: "057",
     accountNumber: "2088123340",
     accountName: "KEMI ADEYEMI",
+    payoutRail: "bank",
+    payoutCountry: "NG",
+    payoutCurrency: "NGN",
+    payoutHandle: "2088123340",
+    fxFeeBps: 150,
   },
 ];
 

@@ -38,6 +38,7 @@ type CreatorRow = {
   payout_currency: string | null;
   payout_handle: string | null;
   fx_fee_bps: number | null;
+  bind_token: string | null;
 };
 
 function toCommunity(row: CreatorRow): Community {
@@ -66,6 +67,7 @@ function toCommunity(row: CreatorRow): Community {
     payoutCurrency: (row.payout_currency as Community["payoutCurrency"]) || "USD",
     payoutHandle: row.payout_handle ?? row.account_number,
     fxFeeBps: row.fx_fee_bps ?? 150,
+    bindToken: row.bind_token ?? null,
   };
 }
 
@@ -81,7 +83,10 @@ export async function ensureAccount(actor: Actor) {
   `;
 }
 
-export async function loadWorld(actor: Actor): Promise<World> {
+export async function loadWorld(
+  actor: Actor,
+  opts: { live?: boolean; operator?: boolean } = {},
+): Promise<World> {
   const sql = await getSql();
   const sessions = await sql<{ pending_json: string | null; role: string }>`
     select pending_json, role from telegram_accounts where user_id = ${actor.id} limit 1
@@ -94,7 +99,15 @@ export async function loadWorld(actor: Actor): Promise<World> {
   }
   const role = (sessions[0]?.role === "creator" ? "creator" : "member") as Role;
 
-  const creatorRows = await sql<CreatorRow>`select * from creators order by created_at`;
+  const ownedRows = await sql<CreatorRow>`select * from creators where user_id = ${actor.id}`;
+  const publicRows = await sql<CreatorRow>`
+    select * from creators where is_public = true order by created_at
+  `;
+  const byId = new Map<string, CreatorRow>();
+  for (const row of [...publicRows, ...ownedRows]) byId.set(row.id, row);
+  const creatorRows = [...byId.values()];
+  const ownedId = ownedRows[0]?.id ?? null;
+
   const planRows = await sql<{
     id: string;
     creator_id: string;
@@ -104,7 +117,11 @@ export async function loadWorld(actor: Actor): Promise<World> {
     price_usd: number;
     is_active: boolean;
     sort_order: number;
-  }>`select * from plans order by sort_order`;
+  }>`
+    select * from plans
+    where creator_id in (select id from creators where is_public = true or user_id = ${actor.id})
+    order by sort_order
+  `;
   const memberRows = await sql<{
     id: string;
     creator_id: string;
@@ -118,7 +135,11 @@ export async function loadWorld(actor: Actor): Promise<World> {
     joined_at: string | null;
     removed_at: string | null;
     remove_reason: string | null;
-  }>`select * from telegram_members`;
+  }>`
+    select * from telegram_members
+    where user_id = ${actor.id}
+       or (${ownedId}::text is not null and creator_id = ${ownedId})
+  `;
   const subRows = await sql<{
     id: string;
     user_id: string;
@@ -131,7 +152,11 @@ export async function loadWorld(actor: Actor): Promise<World> {
     telegram_username: string | null;
     retry_count: number;
     card_failing: boolean;
-  }>`select * from subscriptions`;
+  }>`
+    select * from subscriptions
+    where user_id = ${actor.id}
+       or (${ownedId}::text is not null and creator_id = ${ownedId})
+  `;
   const payRows = await sql<{
     id: string;
     user_id: string;
@@ -148,24 +173,38 @@ export async function loadWorld(actor: Actor): Promise<World> {
     creator_payout: number;
     settlement_status: Payment["settlement"];
     created_at: string;
-  }>`select * from payments order by created_at desc`;
-  const kwRows = await sql<{
-    id: string;
-    creator_id: string;
-    keyword: string;
-    action: Keyword["action"];
-  }>`select * from keyword_filters`;
-  const modRows = await sql<{
-    id: string;
-    creator_id: string;
-    telegram_username: string | null;
-    message_text: string;
-    classification: ModEvent["classification"];
-    confidence: number | null;
-    action: ModEvent["action"];
-    created_at: string;
-  }>`select * from moderation_events order by created_at desc limit 40`;
-  const reminded = await sql<{ subscription_id: string }>`select subscription_id from reminders`;
+  }>`
+    select * from payments
+    where user_id = ${actor.id}
+       or (${ownedId}::text is not null and creator_id = ${ownedId})
+    order by created_at desc
+  `;
+  const kwRows = ownedId
+    ? await sql<{
+        id: string;
+        creator_id: string;
+        keyword: string;
+        action: Keyword["action"];
+      }>`select * from keyword_filters where creator_id = ${ownedId}`
+    : [];
+  const modRows = ownedId
+    ? await sql<{
+        id: string;
+        creator_id: string;
+        telegram_username: string | null;
+        message_text: string;
+        classification: ModEvent["classification"];
+        confidence: number | null;
+        action: ModEvent["action"];
+        created_at: string;
+      }>`select * from moderation_events where creator_id = ${ownedId} order by created_at desc limit 40`
+    : [];
+  const reminded = await sql<{ subscription_id: string }>`
+    select r.subscription_id from reminders r
+    join subscriptions s on s.id = r.subscription_id
+    where s.user_id = ${actor.id}
+       or (${ownedId}::text is not null and s.creator_id = ${ownedId})
+  `;
 
   const communities = creatorRows.map(toCommunity);
   const plans: Plan[] = planRows.map((p) => ({
@@ -256,6 +295,8 @@ export async function loadWorld(actor: Actor): Promise<World> {
     modEvents,
     reminded: reminded.map((r) => r.subscription_id),
     now: Date.now(),
+    live: opts.live ?? false,
+    operator: opts.operator ?? false,
   };
 }
 

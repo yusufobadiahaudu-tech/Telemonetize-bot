@@ -1,16 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { getSql } from "@/lib/db";
 import { fulfillPayment } from "@/lib/server/access";
-import { getPaystackKeys, verifyPaystackSignature, verifyTransaction } from "@/lib/server/paystack";
+import { amountsMatch, getPaystackKeys, verifyPaystackSignature, verifyTransaction } from "@/lib/server/paystack";
 
 async function handle(request: Request) {
   const keys = await getPaystackKeys();
+  if (!keys) {
+    return new Response("paystack not configured", { status: 503 });
+  }
   const raw = await request.text();
-  if (keys) {
-    const signature = request.headers.get("x-paystack-signature");
-    if (!verifyPaystackSignature(raw, signature, keys.secret)) {
-      return new Response("invalid signature", { status: 401 });
-    }
+  const signature = request.headers.get("x-paystack-signature");
+  if (!verifyPaystackSignature(raw, signature, keys.secret)) {
+    return new Response("invalid signature", { status: 401 });
   }
 
   let body: { event?: string; data?: { reference?: string } } = {};
@@ -31,6 +32,7 @@ async function handle(request: Request) {
     plan_id: string;
     amount: number;
     currency: string;
+    charged_minor: number;
     provider: string;
     provider_ref: string | null;
     status: string;
@@ -41,7 +43,7 @@ async function handle(request: Request) {
 
   const event = body.event ?? "";
   if (event.includes("failed") || event.includes("abandoned")) {
-    await sql`update payments set status = 'failed', settlement_status = 'unsplit' where id = ${payment.id}`;
+    await sql`update payments set status = 'failed', settlement_status = 'unsplit' where id = ${payment.id} and status = 'pending'`;
     return new Response("failed", { status: 200 });
   }
 
@@ -49,19 +51,27 @@ async function handle(request: Request) {
     return new Response("ignored", { status: 200 });
   }
 
-  if (keys) {
-    try {
-      const verified = await verifyTransaction(reference);
-      if (verified.status !== "success") {
-        await sql`update payments set status = 'failed' where id = ${payment.id} and status = 'pending'`;
-        return new Response("not success", { status: 200 });
-      }
-    } catch {
-      return new Response("verify failed", { status: 200 });
-    }
+  let verified;
+  try {
+    verified = await verifyTransaction(reference);
+  } catch {
+    return new Response("verify failed", { status: 502 });
+  }
+  if (verified.status !== "success") {
+    await sql`update payments set status = 'failed' where id = ${payment.id} and status = 'pending'`;
+    return new Response("not success", { status: 200 });
+  }
+  if (payment.charged_minor > 0 && !amountsMatch(payment.charged_minor, verified.amount)) {
+    await sql`update payments set status = 'failed', settlement_status = 'unsplit' where id = ${payment.id} and status = 'pending'`;
+    return new Response("amount mismatch", { status: 200 });
   }
 
-  await fulfillPayment(payment);
+  await fulfillPayment(payment, null, {
+    amount: verified.amount,
+    currency: verified.currency,
+    authorizationCode: verified.authorizationCode,
+    email: verified.email,
+  });
   return new Response("ok", { status: 200 });
 }
 

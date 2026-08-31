@@ -99,7 +99,6 @@ function applyClientEffect(effect: Effect): BotReply[] {
       const community = store.createCommunity(effect.name, effect.priceUsd, effect.platformPlan, {
         bankCode: effect.bankCode,
         accountNumber: effect.accountNumber,
-        payout: effect.payout,
       });
       const dest = destinationFor(community);
       return [
@@ -115,14 +114,6 @@ function applyClientEffect(effect: Effect): BotReply[] {
       ];
     }
     case "connect_bank":
-      if (effect.payout) {
-        return [
-          {
-            text: store.connectPayout(effect.payout),
-            buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
-          },
-        ];
-      }
       return [
         {
           text: store.connectBank(effect.bankCode, effect.accountNumber),
@@ -132,7 +123,7 @@ function applyClientEffect(effect: Effect): BotReply[] {
     case "connect_payout":
       return [
         {
-          text: store.connectPayout(effect.payout),
+          text: "Live payouts are Nigerian bank accounts via Paystack. Other rails are paused until each one has a settlement API.",
           buttons: [[{ label: "Studio", payload: "studio", tone: "primary" }]],
         },
       ];

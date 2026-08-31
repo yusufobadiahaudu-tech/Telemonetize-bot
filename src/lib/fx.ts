@@ -41,7 +41,7 @@ export function midRate(from: Currency, to: Currency, book: RateBook = {}): numb
 }
 
 export function majorToMinor(major: number, currency: Currency): number {
-  const zeroDecimal = currency === "JPY" || currency === "NGN" || currency === "KES" || currency === "XOF" || currency === "UGX" || currency === "TZS";
+  const zeroDecimal = currency === "JPY" || currency === "XOF" || currency === "UGX" || currency === "TZS";
   return Math.round(major * (zeroDecimal ? 1 : 100));
 }
 

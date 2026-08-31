@@ -3,10 +3,12 @@ import type { Payment } from "@/lib/types";
 import { getSql } from "@/lib/db";
 import { applyTelegramKick, fulfillPayment } from "./access";
 import { runMoneyLoop } from "./loop";
+import { demoPaymentsEnabled } from "./production";
 
 export const persistCheckoutFn = createServerFn({ method: "POST" })
   .validator((input: Payment) => input)
   .handler(async ({ data }) => {
+    if (!demoPaymentsEnabled()) return { ok: false as const, error: "demo_disabled" };
     const sql = await getSql();
     await sql`
       insert into payments (
@@ -27,6 +29,7 @@ export const persistCheckoutFn = createServerFn({ method: "POST" })
 export const persistFulfillFn = createServerFn({ method: "POST" })
   .validator((input: { reference: string }) => input)
   .handler(async ({ data }) => {
+    if (!demoPaymentsEnabled()) return { ok: false as const, error: "demo_disabled" };
     const sql = await getSql();
     const payments = await sql<{
       id: string;
@@ -57,6 +60,7 @@ export const persistKickFn = createServerFn({ method: "POST" })
     }) => input,
   )
   .handler(async ({ data }) => {
+    if (!demoPaymentsEnabled()) return { ok: false as const, error: "demo_disabled" };
     const sql = await getSql();
     const handle = data.username.replace(/^@/, "").toLowerCase();
     const creators = await sql<{ telegram_chat_id: string | null }>`
@@ -96,5 +100,6 @@ export const persistKickFn = createServerFn({ method: "POST" })
 export const runLoopFn = createServerFn({ method: "POST" })
   .validator((input: { creatorId?: string } = {}) => input)
   .handler(async ({ data }) => {
+    if (!demoPaymentsEnabled()) return { expired: 0, renewed: 0, retried: 0, warned: 0, kicked: 0, reminded: 0 };
     return runMoneyLoop(data.creatorId);
   });

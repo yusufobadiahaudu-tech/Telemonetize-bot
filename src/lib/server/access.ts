@@ -3,7 +3,14 @@ import { usdToMinor, type Currency } from "@/lib/currency";
 import { periodEnd, splitAmounts } from "@/lib/format";
 import { nid } from "@/lib/utils";
 import { publicOrigin } from "./origin";
-import { getPaystackKeys, initializeTransaction } from "./paystack";
+import {
+  amountsMatch,
+  createSubaccount,
+  getPaystackKeys,
+  initializeTransaction,
+  resolveBankAccount,
+} from "./paystack";
+import { demoPaymentsEnabled } from "./production";
 import {
   banChatMember,
   createChatInviteLink,
@@ -42,9 +49,17 @@ type PaymentRow = {
   plan_id: string;
   amount: number;
   currency: string;
+  charged_minor?: number;
   provider: string;
   provider_ref: string | null;
   status: string;
+};
+
+export type VerifiedCharge = {
+  amount: number;
+  currency: string;
+  authorizationCode?: string | null;
+  email?: string | null;
 };
 
 async function platformToken() {
@@ -142,8 +157,14 @@ export async function startPaystackCheckout(opts: {
   subaccount?: string | null;
   metadata: Record<string, unknown>;
 }) {
+  if (opts.provider === "paypal" || opts.provider === "stripe") {
+    throw new Error("PayPal and Stripe checkout are paused until those rails are live.");
+  }
   const keys = await getPaystackKeys();
   if (!keys) {
+    if (!demoPaymentsEnabled()) {
+      throw new Error("Paystack is not connected. Set PAYSTACK_SECRET_KEY.");
+    }
     return {
       authorizationUrl: `${publicOrigin()}/api/demo/paystack?ref=${encodeURIComponent(opts.reference)}`,
       reference: opts.reference,
@@ -156,18 +177,11 @@ export async function startPaystackCheckout(opts: {
       : opts.provider === "mobile_money"
         ? (["mobile_money"] as const)
         : (["card"] as const);
-  if (opts.provider === "paypal" || opts.provider === "stripe") {
-    return {
-      authorizationUrl: `${publicOrigin()}/api/demo/paystack?ref=${encodeURIComponent(opts.reference)}&via=${opts.provider}`,
-      reference: opts.reference,
-      demo: true as const,
-    };
-  }
   const live = await initializeTransaction({
     email: opts.email,
     amount: opts.amountMinor,
     reference: opts.reference,
-    callbackUrl: `${publicOrigin()}/api/demo/paystack?ref=${encodeURIComponent(opts.reference)}`,
+    callbackUrl: `${publicOrigin()}/paid?ref=${encodeURIComponent(opts.reference)}`,
     currency: opts.currency === "NGN" ? "NGN" : "USD",
     channels: [...channels],
     subaccount: opts.subaccount,
@@ -176,14 +190,114 @@ export async function startPaystackCheckout(opts: {
   return { authorizationUrl: live.authorizationUrl, reference: live.reference, demo: false as const };
 }
 
-/** Paid → active seat + invite. Idempotent. Never mint the link before charge.success. */
-export async function fulfillPayment(payment: PaymentRow, telegramUsername?: string | null) {
+export async function connectNigerianPayout(opts: {
+  creatorId: string;
+  bankCode: string;
+  accountNumber: string;
+  businessName: string;
+  feeBps: number;
+  actorName: string;
+}) {
+  const keys = await getPaystackKeys();
+  if (!keys && !demoPaymentsEnabled()) {
+    throw new Error("Paystack is not connected. Set PAYSTACK_SECRET_KEY to attach a NUBAN.");
+  }
+  let accountName = opts.actorName.toUpperCase();
+  let subaccount: string | null = null;
+  if (keys) {
+    const resolved = await resolveBankAccount(opts.accountNumber, opts.bankCode);
+    accountName = resolved.accountName;
+    const created = await createSubaccount({
+      businessName: opts.businessName,
+      bankCode: opts.bankCode,
+      accountNumber: opts.accountNumber,
+      percentageCharge: opts.feeBps / 100,
+    });
+    subaccount = created.subaccountCode;
+  }
+  return { accountName, subaccount, verified: Boolean(keys) };
+}
+
+async function replayFulfill(payment: PaymentRow, telegramUsername?: string | null) {
+  const sql = await getSql();
+  if (payment.plan_id === "pro") return { kind: "pro" as const, paymentId: payment.id };
+  const plans = await sql<PlanRow>`select * from plans where id = ${payment.plan_id}`;
+  const plan = plans[0];
+  const creators = await sql<CreatorRow>`select * from creators where id = ${payment.creator_id}`;
+  const creator = creators[0];
+  const members = await sql<{ invite_url: string | null }>`
+    select invite_url from telegram_members
+    where creator_id = ${payment.creator_id} and user_id = ${payment.user_id}
+    limit 1
+  `;
+  return {
+    kind: "member" as const,
+    paymentId: payment.id,
+    inviteUrl: members[0]?.invite_url ?? "",
+    liveInvite: Boolean(creator?.telegram_chat_id),
+    creator: creator!,
+    plan: plan!,
+    replayed: true as const,
+    telegramUsername,
+  };
+}
+
+/** Paid → active seat + invite. Idempotent. Claim pending first so two webhooks cannot double-admit. */
+export async function fulfillPayment(
+  payment: PaymentRow,
+  telegramUsername?: string | null,
+  verified?: VerifiedCharge,
+) {
+  const sql = await getSql();
+
+  if (payment.status === "success") {
+    return replayFulfill(payment, telegramUsername);
+  }
+
+  if (verified && payment.charged_minor && payment.charged_minor > 0) {
+    if (!amountsMatch(payment.charged_minor, verified.amount)) {
+      await sql`update payments set status = 'failed', settlement_status = 'unsplit' where id = ${payment.id} and status = 'pending'`;
+      throw new Error("Paystack amount does not match the pending checkout.");
+    }
+  }
+
+  const claimed = await sql<PaymentRow>`
+    update payments set status = 'processing'
+    where id = ${payment.id} and status = 'pending'
+    returning id, user_id, creator_id, subscription_id, plan_id, amount, currency, charged_minor,
+      provider, provider_ref, status
+  `;
+  if (!claimed[0]) {
+    const current = await sql<PaymentRow>`select * from payments where id = ${payment.id} limit 1`;
+    if (current[0]?.status === "success") return replayFulfill(current[0], telegramUsername);
+    throw new Error("Payment is not pending");
+  }
+  const row = claimed[0];
+
+  try {
+    return await admitAfterClaim(row, telegramUsername, verified);
+  } catch (err) {
+    await sql`update payments set status = 'pending' where id = ${row.id} and status = 'processing'`;
+    throw err;
+  }
+}
+
+async function admitAfterClaim(
+  payment: PaymentRow,
+  telegramUsername?: string | null,
+  verified?: VerifiedCharge,
+) {
   const sql = await getSql();
   const identity = await resolveTelegramIdentity(payment.user_id, telegramUsername);
+  const authCode = verified?.authorizationCode ?? null;
+  const authEmail = verified?.email ?? checkoutEmail(payment.user_id);
+  const authCurrency = verified?.currency ?? payment.currency;
 
   if (payment.plan_id === "pro") {
     await sql`
-      update payments set status = 'success', settlement_status = 'wallet_and_bank', settled_at = now()
+      update payments set
+        status = 'success', settlement_status = 'wallet_and_bank', settled_at = now(),
+        authorization_code = ${authCode}
       where id = ${payment.id}
     `;
     await sql`
@@ -243,7 +357,10 @@ export async function fulfillPayment(payment: PaymentRow, telegramUsername?: str
         current_period_start = ${start.toISOString()},
         current_period_end = ${end.toISOString()},
         telegram_user_id = ${identity.telegramUserId},
-        telegram_username = coalesce(${username}, telegram_username)
+        telegram_username = coalesce(${username}, telegram_username),
+        authorization_code = coalesce(${authCode}, authorization_code),
+        authorization_email = coalesce(${authEmail}, authorization_email),
+        authorization_currency = coalesce(${authCurrency}, authorization_currency)
       where id = ${subId}
     `;
   } else {
@@ -251,10 +368,12 @@ export async function fulfillPayment(payment: PaymentRow, telegramUsername?: str
     await sql`
       insert into subscriptions (
         id, user_id, creator_id, plan_id, status, auto_renew,
-        current_period_start, current_period_end, telegram_user_id, telegram_username
+        current_period_start, current_period_end, telegram_user_id, telegram_username,
+        authorization_code, authorization_email, authorization_currency
       ) values (
         ${subId}, ${payment.user_id}, ${creator.id}, ${plan.id}, 'active', true,
-        ${start.toISOString()}, ${end.toISOString()}, ${identity.telegramUserId}, ${username}
+        ${start.toISOString()}, ${end.toISOString()}, ${identity.telegramUserId}, ${username},
+        ${authCode}, ${authEmail}, ${authCurrency}
       )
     `;
   }
@@ -266,7 +385,8 @@ export async function fulfillPayment(payment: PaymentRow, telegramUsername?: str
       platform_fee = ${split.platformFee},
       creator_payout = ${split.creatorPayout},
       settlement_status = 'wallet_and_bank',
-      settled_at = now()
+      settled_at = now(),
+      authorization_code = ${authCode}
     where id = ${payment.id}
   `;
   await sql`
