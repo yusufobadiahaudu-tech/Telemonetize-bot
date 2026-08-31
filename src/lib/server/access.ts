@@ -138,7 +138,7 @@ export async function startPaystackCheckout(opts: {
   amountMinor: number;
   currency: string;
   reference: string;
-  provider: "card" | "transfer";
+  provider: "card" | "transfer" | "mobile_money" | "paypal" | "stripe";
   subaccount?: string | null;
   metadata: Record<string, unknown>;
 }) {
@@ -150,7 +150,19 @@ export async function startPaystackCheckout(opts: {
       demo: true as const,
     };
   }
-  const channels = opts.provider === "transfer" ? (["bank_transfer"] as const) : (["card"] as const);
+  const channels =
+    opts.provider === "transfer"
+      ? (["bank_transfer"] as const)
+      : opts.provider === "mobile_money"
+        ? (["mobile_money"] as const)
+        : (["card"] as const);
+  if (opts.provider === "paypal" || opts.provider === "stripe") {
+    return {
+      authorizationUrl: `${publicOrigin()}/api/demo/paystack?ref=${encodeURIComponent(opts.reference)}&via=${opts.provider}`,
+      reference: opts.reference,
+      demo: true as const,
+    };
+  }
   const live = await initializeTransaction({
     email: opts.email,
     amount: opts.amountMinor,
