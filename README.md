@@ -16,14 +16,31 @@ Customers never see the split.
 
 ## Architecture
 
-- `src/lib/bot/fsm.ts` — pure `(world, event) => { next, replies, effects }`.
+- `src/lib/bot/fsm.ts` — pure `(world, event) => { next, replies, effects }`. No Zustand, no React.
+- `src/lib/bot/engine.ts` — Telegram simulator adapter.
+- `src/lib/server/telegram-bot.ts` — `handlePrivateMessage` drives the same FSM.
+- `src/lib/server/access.ts` — checkout initialize + webhook fulfill + `createChatInviteLink`.
 - `src/lib/fx.ts` / `src/lib/server/fx-live.ts` — conversion quotes and live mid-market rates.
 - `src/lib/payouts.ts` — global rails (bank, mobile money, PayPal, Stripe).
-- `migrations/0002_schema.sql` + `0004_global_rails.sql` — payout rails and FX columns.
+- `src/lib/server/loop.ts` — cron job at `POST /api/cron/loop`.
+- `migrations/0002_schema.sql` + `0004_global_rails.sql` — communities, plans, members, payments, payout rails.
 
 ## Try the demo
 
 Seeded desk: Adaeze’s **Lagos Alpha Circle** (`LA-ADA`).
+
+- Pay as a customer (initialize, then simulate `charge.success`), then kick non-renewals.
+- Open the bot and send `LA-ADA` or `Lagos Alpha`.
+- Claim a creator ID, or walk Adaeze’s desk and run `/loop`.
+
+## Run locally
+
+```bash
+npm install
+npm run dev
+```
+
+Auth stays off. Postgres (Neon in production, PGLite in preview) holds creators, plans, members, and payments.
 
 Webhooks:
 
